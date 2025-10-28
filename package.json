@@ -1,0 +1,48 @@
+{
+  "name": "clipforge",
+  "version": "1.0.0",
+  "description": "A streamlined desktop video editor for macOS",
+  "main": "electron/main.js",
+  "homepage": "./",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 http://localhost:5174 && NODE_ENV=development electron .",
+    "build": "npm run download-ffmpeg && vite build && electron-builder",
+    "build:mac": "npm run download-ffmpeg && vite build && electron-builder --mac",
+    "dist": "npm run download-ffmpeg && vite build && electron-builder --publish=never",
+    "download-ffmpeg": "node scripts/download-ffmpeg.js",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "video-editor",
+    "electron",
+    "macos",
+    "ffmpeg"
+  ],
+  "author": "ClipForge Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.8",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.0.1",
+    "konva": "^9.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-konva": "^18.2.10",
+    "react-redux": "^9.0.4"
+  },
+  "build": {
+    "extends": "./electron-builder.yml"
+  }
+}

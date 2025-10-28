@@ -1,0 +1,44 @@
+appId: com.clipforge.app
+productName: ClipForge
+directories:
+  output: dist
+  buildResources: electron/resources
+
+files:
+  - "electron/**/*"
+  - "dist/**/*"
+  - "node_modules/**/*"
+  - "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
+  - "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+  - "!node_modules/*.d.ts"
+  - "!node_modules/.bin"
+  - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
+
+extraResources:
+  - from: "electron/resources/ffmpeg"
+    to: "ffmpeg"
+    filter: ["**/*"]
+
+mac:
+  target:
+    - target: dmg
+      arch: ["x64", "arm64"]
+  category: public.app-category.video
+  icon: electron/resources/icons/icon.icns
+  entitlements: electron/resources/entitlements.mac.plist
+  entitlementsInherit: electron/resources/entitlements.mac.plist
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: false
+
+dmg:
+  title: ClipForge
+  icon: electron/resources/icons/icon.icns
+  background: electron/resources/dmg-background.png
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

@@ -1,0 +1,125 @@
+.recording-panel-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.recording-panel {
+  background-color: #2a2a2a;
+  border-radius: 12px;
+  width: 500px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: hidden;
+  border: 1px solid #3a3a3a;
+}
+
+.recording-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.recording-panel-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: white;
+  margin: 0;
+}
+
+.recording-panel-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.recording-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background-color: #3a3a3a;
+  border-radius: 8px;
+}
+
+.recording-indicator {
+  font-size: 24px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.recording-info h4 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  color: white;
+}
+
+.recording-info p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.recording-options {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.option-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.option-group label {
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+}
+
+.option-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.option-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.option-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: white;
+  cursor: pointer;
+}
+
+.option-checkboxes input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #007AFF;
+}
+
+.recording-controls {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}

@@ -1,0 +1,177 @@
+```mermaid
+graph TB
+    subgraph "Frontend (React + Vite)"
+        subgraph "UI Components"
+            App[App.tsx<br/>Main Layout]
+            Toolbar[Toolbar<br/>Import/Record/Export]
+            MediaLib[Media Library<br/>Clip Grid/List]
+            Timeline[Timeline Editor<br/>Tracks & Clips]
+            Preview[Preview Player<br/>Video Playback]
+            Recording[Recording Panel<br/>Screen/Webcam/Audio]
+            Export[Export Dialog<br/>Config & Progress]
+        end
+        
+        subgraph "State Management (Redux Toolkit)"
+            MediaSlice[Media Slice<br/>Imported Clips]
+            TimelineSlice[Timeline Slice<br/>Clips & Edits]
+            PlaybackSlice[Playback Slice<br/>Current Time/State]
+        end
+        
+        subgraph "Custom Hooks"
+            UseMediaImport[useMediaImport<br/>File Handling]
+            UseTimeline[useTimeline<br/>Edit Operations]
+            UseRecording[useRecording<br/>Record Control]
+            UsePlayback[usePlayback<br/>Playback Logic]
+            UseExport[useExport<br/>Export Control]
+        end
+        
+        subgraph "Utils & Helpers"
+            FileHandlers[File Handlers<br/>Drag & Drop]
+            ThumbnailGen[Thumbnail Generator<br/>Frame Extraction]
+            VideoMeta[Video Metadata<br/>Probe Info]
+            TimeFormatter[Time Formatter<br/>Display Utils]
+            KonvaRenderer[Konva Renderer<br/>Timeline Canvas]
+        end
+    end
+    
+    subgraph "Electron IPC Bridge"
+        IPC[Electron IPC<br/>Frontend ↔ Backend]
+    end
+    
+    subgraph "Backend (Node.js + Electron)"
+        subgraph "Electron Services"
+            MediaCmd[Media Service<br/>Import/Probe/Thumbnail]
+            RecordCmd[Recording Service<br/>Start/Stop/Save]
+            ExportCmd[Export Service<br/>Encode/Progress]
+        end
+        
+        subgraph "Recording Module"
+            ScreenRec[Screen Recorder<br/>Electron desktopCapturer]
+            WebcamRec[Webcam Handler<br/>getUserMedia API]
+            AudioRec[Audio Capture<br/>Mic + System Audio]
+        end
+        
+        subgraph "FFmpeg Module"
+            FFmpegWrapper[FFmpeg Service<br/>Process Management]
+            Encoder[Video Encoder<br/>Stitch & Export]
+            Prober[Media Prober<br/>Extract Metadata]
+        end
+        
+        subgraph "File System"
+            FileIO[File I/O<br/>Node.js fs API]
+            TempFiles[Temp File Manager<br/>Recording Cache]
+        end
+    end
+    
+    subgraph "External APIs & Libraries"
+        FFmpeg[Packaged FFmpeg Binary<br/>Intel & Apple Silicon]
+        
+        subgraph "Platform APIs"
+            MacOS[macOS APIs<br/>Electron APIs<br/>File System]
+        end
+        
+        WebAPIs[Web APIs<br/>getUserMedia<br/>MediaRecorder<br/>File System Access]
+    end
+    
+    subgraph "File System"
+        UserFiles[User Video Files<br/>MOV Format]
+        Exports[Exported Videos<br/>Final Output]
+        Thumbnails[Thumbnail Cache<br/>.jpg files]
+    end
+    
+    %% Frontend Connections
+    App --> Toolbar
+    App --> MediaLib
+    App --> Timeline
+    App --> Preview
+    App --> Recording
+    App --> Export
+    
+    Toolbar --> UseMediaImport
+    Toolbar --> UseRecording
+    Toolbar --> UseExport
+    
+    MediaLib --> MediaSlice
+    MediaLib --> FileHandlers
+    MediaLib --> ThumbnailGen
+    
+    Timeline --> TimelineSlice
+    Timeline --> UseTimeline
+    Timeline --> KonvaRenderer
+    
+    Preview --> PlaybackSlice
+    Preview --> UsePlayback
+    
+    Recording --> UseRecording
+    
+    Export --> UseExport
+    
+    %% Store Connections
+    UseMediaImport --> MediaSlice
+    UseTimeline --> TimelineSlice
+    UsePlayback --> PlaybackSlice
+    
+    %% Utils Connections
+    ThumbnailGen --> VideoMeta
+    FileHandlers --> VideoMeta
+    
+    %% IPC Bridge Connections
+    UseMediaImport -.Electron IPC.-> IPC
+    UseRecording -.Electron IPC.-> IPC
+    UseExport -.Electron IPC.-> IPC
+    ThumbnailGen -.Electron IPC.-> IPC
+    VideoMeta -.Electron IPC.-> IPC
+    
+    IPC -.Services.-> MediaCmd
+    IPC -.Services.-> RecordCmd
+    IPC -.Services.-> ExportCmd
+    
+    %% Backend Service Connections
+    MediaCmd --> FFmpegWrapper
+    MediaCmd --> Prober
+    MediaCmd --> FileIO
+    
+    RecordCmd --> ScreenRec
+    RecordCmd --> WebcamRec
+    RecordCmd --> AudioRec
+    RecordCmd --> TempFiles
+    
+    ExportCmd --> Encoder
+    ExportCmd --> FileIO
+    
+    %% FFmpeg Connections
+    FFmpegWrapper --> FFmpeg
+    Encoder --> FFmpeg
+    Prober --> FFmpeg
+    
+    %% Platform Connections
+    FileIO --> MacOS
+    
+    %% Web API Connections
+    WebcamRec -.Browser API.-> WebAPIs
+    ScreenRec -.Electron API.-> MacOS
+    
+    %% File System Connections
+    FileIO --> UserFiles
+    FileIO --> Exports
+    FileIO --> Thumbnails
+    
+    MediaCmd --> Thumbnails
+    
+    %% Styling
+    classDef frontend fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef backend fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef external fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef storage fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef ipc fill:#fce4ec,stroke:#c2185b,stroke-width:3px
+    
+    class App,Toolbar,MediaLib,Timeline,Preview,Recording,Export,MediaSlice,TimelineSlice,PlaybackSlice,UseMediaImport,UseTimeline,UseRecording,UsePlayback,UseExport,FileHandlers,ThumbnailGen,VideoMeta,TimeFormatter,KonvaRenderer frontend
+    
+    class MediaCmd,RecordCmd,ExportCmd,ScreenRec,WebcamRec,AudioRec,FFmpegWrapper,Encoder,Prober,FileIO,TempFiles backend
+    
+    class FFmpeg,MacOS,WebAPIs external
+    
+    class UserFiles,Exports,Thumbnails storage
+    
+    class IPC ipc
+```

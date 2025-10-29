@@ -191,36 +191,6 @@ class FFmpegService {
     }
   }
 
-  async exportVideo(inputFiles, outputPath, options = {}) {
-    const {
-      resolution = '1920x1080',
-      framerate = 30,
-      quality = 'high',
-      codec = 'libx264'
-    } = options;
-
-    const args = [
-      '-y', // Overwrite output file
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', inputFiles, // This should be a concat file
-      '-c:v', codec,
-      '-preset', 'medium',
-      '-crf', quality === 'high' ? '18' : quality === 'medium' ? '23' : '28',
-      '-r', framerate.toString(),
-      '-s', resolution,
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      outputPath
-    ];
-
-    try {
-      const result = await this.executeCommand(args);
-      return { success: true, outputPath, ...result };
-    } catch (error) {
-      throw new Error(`Failed to export video: ${error.message}`);
-    }
-  }
 
   cancelProcess(processId) {
     const process = this.activeProcesses.get(processId);

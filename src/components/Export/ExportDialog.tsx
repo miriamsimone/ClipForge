@@ -38,21 +38,27 @@ const ExportDialog: React.FC = () => {
           return null;
         }
 
-        const trimIn = typeof clip.trimIn === 'number' ? clip.trimIn : 0;
-        const trimOutCandidate = typeof clip.trimOut === 'number'
-          ? clip.trimOut
-          : (clip.trimIn ?? 0) + (clip.duration ?? mediaClip.duration ?? 0);
-        const trimOut = Math.min(trimOutCandidate, mediaClip.duration ?? trimOutCandidate);
-        const duration = Math.max(0, (clip.duration ?? (trimOut - trimIn)));
+        const baseTrimIn = Math.max(0, Number(clip.trimIn ?? 0));
+        const baseDuration = clip.duration ?? mediaClip.duration ?? 0;
+        const rawTrimOut = Number.isFinite(clip.trimOut)
+          ? Number(clip.trimOut)
+          : baseTrimIn + baseDuration;
+        const boundedTrimOut = Math.max(baseTrimIn, Math.min(rawTrimOut, mediaClip.duration ?? rawTrimOut));
+        const trimmedDuration = Math.max(0, boundedTrimOut - baseTrimIn);
+
+        if (trimmedDuration <= 0.01) {
+          return null;
+        }
 
         return {
           id: clip.id,
           filePath: mediaClip.filePath,
           startTime: clip.startTime ?? 0,
-          duration,
-          trimIn,
-          trimOut,
+          duration: trimmedDuration,
+          trimIn: baseTrimIn,
+          trimOut: boundedTrimOut,
           trackId: track.id,
+          hasAudio: Boolean(mediaClip.hasAudio),
         } satisfies ExportTimelineClip;
       })
     );
@@ -76,6 +82,17 @@ const ExportDialog: React.FC = () => {
       }
     };
   }, [dispatch, isExporting]);
+
+  useEffect(() => {
+    if (!isExporting && progress.stage === 'complete') {
+      const timeoutId = setTimeout(() => {
+        dispatch(resetExport());
+        dispatch(closeAllModals());
+      }, 1500);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [dispatch, isExporting, progress.stage]);
 
   const resolutionMap: Record<ResolutionOption, '640x480' | '1280x720' | '1920x1080' | 'source'> = {
     '480p': '640x480',

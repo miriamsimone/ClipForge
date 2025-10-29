@@ -34,7 +34,6 @@ mac:
 dmg:
   title: ClipForge
   icon: electron/resources/icons/icon.icns
-  background: electron/resources/dmg-background.png
   contents:
     - x: 130
       y: 220

@@ -6,6 +6,7 @@ export interface ExportTimelineClip {
   trimIn: number;
   trimOut: number;
   trackId: number;
+  hasAudio: boolean;
 }
 
 export interface ExportOptions {

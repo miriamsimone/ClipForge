@@ -1,10 +1,22 @@
+export interface ExportTimelineClip {
+  id: string;
+  filePath: string;
+  startTime: number;
+  duration: number;
+  trimIn: number;
+  trimOut: number;
+  trackId: number;
+}
+
 export interface ExportOptions {
   outputPath: string;
-  resolution: '480p' | '720p' | '1080p' | 'source';
+  resolution: '640x480' | '1280x720' | '1920x1080' | 'source';
   framerate: 24 | 30 | 60 | 'source';
   quality: 'low' | 'medium' | 'high' | 'maximum';
-  codec: 'h264' | 'h265';
+  codec: 'libx264' | 'libx265';
   audioCodec: 'aac' | 'mp3';
+  container: 'mp4' | 'mov';
+  timelineClips: ExportTimelineClip[];
   bitrate?: number;
   customResolution?: {
     width: number;

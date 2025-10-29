@@ -46,6 +46,16 @@
   gap: 20px;
 }
 
+.export-error {
+  background-color: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .option-group {
   display: flex;
   flex-direction: column;

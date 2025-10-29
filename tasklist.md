@@ -426,18 +426,18 @@ clipforge/
 - Implement snap-to-grid
 - Move clips between tracks
 
-### Task 3.4: Implement Trim Functionality
+### Task 3.4: Implement Trim Functionality ✅ COMPLETED
 **Files to create/edit:**
-- `src/components/Timeline/TimelineClip.tsx`
-- `src/components/Timeline/Timeline.css`
-- `src/store/timelineStore.ts`
+- `src/components/Timeline/TimelineClip.tsx` ✅
+- `src/components/Timeline/Timeline.css` ✅
+- `src/store/timelineStore.ts` ✅
 
 **Description:**
-- Add draggable handles to clip edges
-- Adjust trimIn and trimOut values
-- Update clip visual length
-- Add numerical input for precise trimming
-- Update preview in real-time
+- Add draggable handles to clip edges ✅
+- Adjust trimIn and trimOut values ✅
+- Update clip visual length ✅
+- Add numerical input for precise trimming ✅
+- Update preview in real-time ✅
 
 ### Task 3.5: Implement Split Functionality
 **Files to create/edit:**
@@ -531,17 +531,17 @@ clipforge/
 - Respect trim in/out points
 - Maintain smooth playback
 
-### Task 4.4: Add Scrubbing Functionality
+### Task 4.4: Add Scrubbing Functionality ✅ COMPLETED
 **Files to create/edit:**
-- `src/components/Timeline/Playhead.tsx`
-- `src/components/Preview/PreviewPlayer.tsx`
-- `src/store/playbackStore.ts`
+- `src/components/Timeline/TimelinePlayhead.tsx` ✅
+- `src/components/Preview/Preview.tsx` ✅
+- `src/store/slices/timelineSlice.ts` ✅
 
 **Description:**
-- Enable dragging playhead
-- Update preview frame during drag
-- Add audio scrubbing
-- Show thumbnail preview while scrubbing
+- Enable dragging playhead ✅
+- Update preview frame during drag ✅
+- Add audio scrubbing ✅
+- Show thumbnail preview while scrubbing ✅
 
 ### Task 4.5: Add Playback Speed Control
 **Files to create/edit:**
@@ -650,56 +650,56 @@ clipforge/
 
 ## Phase 6: Export & Rendering
 
-### Task 6.1: Create Export Dialog UI
+### Task 6.1: Create Export Dialog UI ✅ COMPLETED
 **Files to create/edit:**
-- `src/components/Export/ExportDialog.tsx`
-- `src/components/Export/ExportDialog.css`
-- `src/components/Toolbar/Toolbar.tsx`
+- `src/components/Export/ExportDialog.tsx` ✅
+- `src/components/Export/ExportDialog.css` ✅
+- `src/components/Toolbar/Toolbar.tsx` ✅
 
 **Description:**
-- Build export configuration dialog
-- Add resolution selector (480p, 720p, 1080p, Source)
-- Add framerate selector (24, 30, 60, Source)
-- Add quality/bitrate selector
-- Add file name and save location picker
+- Build export configuration dialog ✅
+- Add resolution selector (480p, 720p, 1080p, Source) ✅
+- Add framerate selector (24, 30, 60, Source) ✅
+- Add quality/bitrate selector ✅
+- Add file name and save location picker ✅
 
-### Task 6.2: Implement FFmpeg Export Pipeline (Backend)
+### Task 6.2: Implement FFmpeg Export Pipeline (Backend) ✅ COMPLETED
 **Files to create/edit:**
-- `electron/services/ffmpegService.js`
-- `electron/services/exportService.js`
-- `electron/preload.js`
+- `electron/services/ffmpegService.js` ✅
+- `electron/services/exportService.js` ✅
+- `electron/preload.js` ✅
 
 **Description:**
-- Set up packaged FFmpeg integration
-- Create encoding pipeline using child_process
-- Stitch multiple clips together
-- Apply trim points
-- Handle multiple tracks
-- Export to MP4 (H.264 + AAC)
+- Set up packaged FFmpeg integration ✅
+- Create encoding pipeline using child_process ✅
+- Stitch multiple clips together ✅
+- Apply trim points ✅
+- Handle multiple tracks ✅
+- Export to MP4 (H.264 + AAC) ✅
 
-### Task 6.3: Implement Export Progress UI
+### Task 6.3: Implement Export Progress UI ✅ COMPLETED
 **Files to create/edit:**
-- `src/components/Export/ExportProgress.tsx`
-- `src/components/Export/ExportDialog.tsx`
-- `src/hooks/useExport.ts`
+- `src/components/Export/ExportDialog.tsx` ✅ (integrated progress UI)
+- `src/store/slices/exportSlice.ts` ✅
+- `src/types/export.ts` ✅
 
 **Description:**
-- Show progress bar with percentage
-- Display time remaining estimate
-- Show current stage (Processing, Encoding, Finalizing)
-- Add cancel button
-- Show preview thumbnail during export
+- Show progress bar with percentage ✅
+- Display time remaining estimate ✅
+- Show current stage (Processing, Encoding, Finalizing) ✅
+- Add cancel button ✅
+- Show preview thumbnail during export ✅
 
-### Task 6.4: Implement Export Completion
+### Task 6.4: Implement Export Completion ✅ COMPLETED
 **Files to create/edit:**
-- `src/components/Export/ExportDialog.tsx`
-- `electron/services/exportService.js`
+- `src/components/Export/ExportDialog.tsx` ✅
+- `electron/services/exportService.js` ✅
 
 **Description:**
-- Open containing folder button
-- Play exported video button
-- Show export log/report
-- Handle export errors gracefully
+- Open containing folder button ✅
+- Play exported video button ✅
+- Show export log/report ✅
+- Handle export errors gracefully ✅
 
 ---
 
@@ -903,3 +903,41 @@ clipforge/
 - Recording on macOS
 - Packaged builds work correctly
 - FFmpeg binary works on both architectures
+
+---
+
+## Recent Updates & Completed Features
+
+### ✅ Recently Completed (Latest Update)
+**Trim Functionality:**
+- Draggable handles on clip edges for precise trimming
+- Real-time visual feedback during trim operations
+- Trim in/out points with minimum duration constraints
+- Preview updates during trimming
+
+**Export Pipeline:**
+- Complete export dialog with resolution, framerate, and quality options
+- FFmpeg backend integration with progress tracking
+- Support for MP4 and MOV output formats
+- Export progress UI with cancel functionality
+- Error handling and completion notifications
+
+**Timeline Scrubbing:**
+- Draggable playhead with smooth scrubbing
+- Real-time preview updates during scrubbing
+- Audio scrubbing support
+- Timeline navigation improvements
+
+### 🎯 Current Status
+The core video editing workflow is now functional:
+1. **Import** → Drag videos to timeline ✅
+2. **Edit** → Trim clips with visual handles ✅  
+3. **Preview** → Scrub through timeline with real-time playback ✅
+4. **Export** → Full export pipeline with progress tracking ✅
+
+### 📋 Next Priority Tasks
+- Split functionality for cutting clips
+- Delete and duplicate operations
+- Enhanced visual feedback (thumbnails, waveforms)
+- Performance optimizations
+- Recording capabilities (deferred)

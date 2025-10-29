@@ -21,7 +21,9 @@ class FFmpegService {
   }
 
   async executeCommand(args, options = {}) {
-    return new Promise((resolve, reject) => {
+    let currentProcessId = null;
+
+    const commandPromise = new Promise((resolve, reject) => {
       // Check if FFmpeg binary exists
       if (!fs.existsSync(this.ffmpegPath)) {
         reject(new Error(`FFmpeg binary not found at ${this.ffmpegPath}`));
@@ -29,6 +31,7 @@ class FFmpegService {
       }
 
       const processId = Date.now().toString();
+      currentProcessId = processId;
       const process = spawn(this.ffmpegPath, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         ...options
@@ -62,6 +65,8 @@ class FFmpegService {
         reject(error);
       });
     });
+    commandPromise.processId = currentProcessId;
+    return commandPromise;
   }
 
   async getMetadata(filePath) {

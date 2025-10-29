@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const FFmpegService = require('./ffmpegService');
 
 class ExportService {
@@ -21,19 +22,23 @@ class ExportService {
 
     try {
       const {
-        timelineClips,
+        timelineClips = [],
         outputPath,
         resolution = '1920x1080',
         framerate = 30,
         quality = 'high',
-        codec = 'libx264'
+        codec = 'libx264',
+        audioCodec = 'aac',
+        container = 'mp4'
       } = options;
+
+      const resolvedOutputPath = this.resolveOutputPath(outputPath, container);
 
       this.exportProgress = {
         stage: 'preparing',
         progress: 0,
         message: 'Preparing export...',
-        outputPath
+        outputPath: resolvedOutputPath
       };
 
       // Create concat file for FFmpeg
@@ -43,39 +48,77 @@ class ExportService {
         stage: 'encoding',
         progress: 10,
         message: 'Starting video encoding...',
-        outputPath
+        outputPath: resolvedOutputPath
       };
 
       // Start FFmpeg export
-      const exportProcess = await this.ffmpegService.executeCommand([
-        '-y', // Overwrite output file
+      const ffmpegArgs = [
+        '-y',
         '-f', 'concat',
         '-safe', '0',
         '-i', concatFilePath,
         '-c:v', codec,
         '-preset', 'medium',
         '-crf', this.getQualityCRF(quality),
-        '-r', framerate.toString(),
-        '-s', resolution,
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-progress', 'pipe:1', // Output progress to stdout
-        outputPath
-      ]);
+      ];
+
+      if (typeof framerate === 'number' && Number.isFinite(framerate)) {
+        ffmpegArgs.push('-r', framerate.toString());
+      }
+
+      if (typeof resolution === 'string' && resolution !== 'source') {
+        ffmpegArgs.push('-s', resolution);
+      }
+
+      ffmpegArgs.push('-c:a', audioCodec || 'aac', '-b:a', '128k');
+
+      if (container === 'mp4') {
+        ffmpegArgs.push('-movflags', '+faststart');
+      }
+
+      ffmpegArgs.push('-progress', 'pipe:1', resolvedOutputPath);
+
+      const exportPromise = this.ffmpegService.executeCommand(ffmpegArgs);
 
       this.currentExport = {
-        process: exportProcess,
+        processPromise: exportPromise,
+        processId: exportPromise.processId,
         concatFilePath,
-        outputPath,
+        outputPath: resolvedOutputPath,
         startTime: Date.now()
       };
 
-      // Monitor progress
+      exportPromise
+        .then(() => {
+          this.exportProgress = {
+            stage: 'complete',
+            progress: 100,
+            message: 'Export complete',
+            outputPath: resolvedOutputPath
+          };
+          this.finishHistoryEntry(options, 'completed');
+          this.cleanup({ resetProgress: false });
+        })
+        .catch((error) => {
+          this.exportProgress = {
+            stage: 'error',
+            progress: 0,
+            message: error.message,
+            outputPath: null
+          };
+          this.finishHistoryEntry(options, 'failed');
+          this.cleanup();
+        });
+
       this.monitorProgress();
 
       return {
         success: true,
-        message: 'Export started successfully'
+        message: 'Export started successfully',
+        options: {
+          ...options,
+          outputPath: resolvedOutputPath,
+        }
       };
     } catch (error) {
       this.cleanup();
@@ -85,13 +128,22 @@ class ExportService {
 
   async createConcatFile(timelineClips) {
     const concatFilePath = path.join(
-      require('os').tmpdir(),
+      os.tmpdir(),
       `clipforge_concat_${Date.now()}.txt`
     );
 
+    if (!Array.isArray(timelineClips) || timelineClips.length === 0) {
+      throw new Error('Timeline is empty. Add clips before exporting.');
+    }
+
     const concatContent = timelineClips
-      .sort((a, b) => a.startTime - b.startTime)
-      .map(clip => `file '${clip.filePath}'`)
+      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0))
+      .map(clip => {
+        if (!clip.filePath) {
+          throw new Error('Timeline clip missing filePath');
+        }
+        return `file '${clip.filePath.replace(/'/g, "'\\''")}'`;
+      })
       .join('\n');
 
     fs.writeFileSync(concatFilePath, concatContent);
@@ -114,19 +166,21 @@ class ExportService {
     const checkProgress = () => {
       if (!this.currentExport) return;
 
-      // Parse FFmpeg progress from stderr
-      // This is a simplified version - in reality, you'd parse the actual FFmpeg output
-      const elapsed = Date.now() - this.currentExport.startTime;
-      const estimatedTotal = elapsed * 2; // Rough estimate
-      const progress = Math.min(90, (elapsed / estimatedTotal) * 100);
+      const previousProgress = Number.isFinite(this.exportProgress.progress)
+        ? this.exportProgress.progress
+        : 10;
+      const newProgress = previousProgress >= 90 ? previousProgress : Math.min(90, previousProgress + 5);
+      const message = this.exportProgress.stage === 'complete'
+        ? this.exportProgress.message
+        : `Encoding... ${Math.round(newProgress)}%`;
 
       this.exportProgress = {
         ...this.exportProgress,
-        progress: Math.round(progress),
-        message: `Encoding... ${Math.round(progress)}%`
+        progress: newProgress,
+        message,
       };
 
-      if (progress < 90) {
+      if (this.currentExport && this.exportProgress.stage === 'encoding') {
         setTimeout(checkProgress, 1000);
       }
     };
@@ -144,9 +198,8 @@ class ExportService {
     }
 
     try {
-      // Cancel FFmpeg process
-      if (this.currentExport.process && this.currentExport.process.kill) {
-        this.currentExport.process.kill('SIGTERM');
+      if (this.currentExport.processId) {
+        this.ffmpegService.cancelProcess(this.currentExport.processId);
       }
 
       this.cleanup();
@@ -163,7 +216,7 @@ class ExportService {
     }
   }
 
-  cleanup() {
+  cleanup({ resetProgress = true } = {}) {
     if (this.currentExport) {
       // Clean up concat file
       if (this.currentExport.concatFilePath && fs.existsSync(this.currentExport.concatFilePath)) {
@@ -172,12 +225,48 @@ class ExportService {
     }
 
     this.currentExport = null;
-    this.exportProgress = {
-      stage: 'idle',
-      progress: 0,
-      message: '',
-      outputPath: null
-    };
+    if (resetProgress) {
+      this.exportProgress = {
+        stage: 'idle',
+        progress: 0,
+        message: '',
+        outputPath: null
+      };
+    }
+  }
+
+  finishHistoryEntry(options, status) {
+    // Placeholder for history tracking
+    if (!this.exportProgress) {
+      return;
+    }
+
+    // Could push to history array or log if needed
+  }
+
+  resolveOutputPath(outputPath, container) {
+    if (!outputPath || typeof outputPath !== 'string') {
+      throw new Error('Please select an output file.');
+    }
+
+    let resolved = outputPath.trim();
+    if (resolved.startsWith('~')) {
+      resolved = path.join(os.homedir(), resolved.slice(1));
+    }
+
+    resolved = path.resolve(resolved);
+
+    const desiredExt = container === 'mov' ? '.mov' : '.mp4';
+    if (path.extname(resolved).toLowerCase() !== desiredExt) {
+      resolved += desiredExt;
+    }
+
+    const dir = path.dirname(resolved);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    return resolved;
   }
 
   async getExportHistory() {

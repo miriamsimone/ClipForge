@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const FFmpegService = require('./ffmpegService');
 
 class ExportService {
   constructor() {
+    this.ffmpegService = new FFmpegService();
     this.currentExport = null;
     this.exportProgress = {
       stage: 'idle',
@@ -78,25 +80,43 @@ class ExportService {
         outputPath: resolvedOutputPath
       };
 
-      // TODO: Implement actual export logic here
-      // For now, simulate export completion
+      // Build FFmpeg command using filter_complex approach
+      const ffmpegArgs = this.buildFFmpegCommand(preparedClips, resolvedOutputPath, options);
+
+      console.log('FFmpeg command:', ffmpegArgs.join(' '));
+
+      // Execute the FFmpeg command
+      const exportPromise = this.ffmpegService.executeCommand(ffmpegArgs);
+
       this.currentExport = {
+        processPromise: exportPromise,
+        processId: exportPromise.processId,
         outputPath: resolvedOutputPath,
         startTime: Date.now(),
         tempFiles: []
       };
 
-      // Simulate export process
-      setTimeout(() => {
-        this.exportProgress = {
-          stage: 'complete',
-          progress: 100,
-          message: 'Export complete',
-          outputPath: resolvedOutputPath
-        };
-        this.finishHistoryEntry(options, 'completed');
-        this.cleanup({ resetProgress: false });
-      }, 2000);
+      exportPromise
+        .then(() => {
+          this.exportProgress = {
+            stage: 'complete',
+            progress: 100,
+            message: 'Export complete',
+            outputPath: resolvedOutputPath
+          };
+          this.finishHistoryEntry(options, 'completed');
+          this.cleanup({ resetProgress: false });
+        })
+        .catch((error) => {
+          this.exportProgress = {
+            stage: 'error',
+            progress: 0,
+            message: error.message,
+            outputPath: null
+          };
+          this.finishHistoryEntry(options, 'failed');
+          this.cleanup();
+        });
 
       this.monitorProgress();
 
@@ -114,6 +134,75 @@ class ExportService {
     }
   }
 
+  buildFFmpegCommand(preparedClips, outputPath, options) {
+    const {
+      resolution = '1920x1080',
+      framerate = 30,
+      quality = 'high',
+      codec = 'libx264',
+      audioCodec = 'aac',
+      container = 'mp4'
+    } = options;
+
+    const args = ['-y']; // Overwrite output file
+
+    // Add input files
+    preparedClips.forEach(clip => {
+      args.push('-i', clip.filePath);
+    });
+
+    // Build filter_complex
+    const videoFilters = preparedClips.map((clip, i) => 
+      `[${i}:v]trim=start=${clip.trimIn}:end=${clip.trimOut},setpts=PTS-STARTPTS[v${i}]`
+    ).join('; ');
+
+    const audioFilters = preparedClips.map((clip, i) => 
+      `[${i}:a]atrim=start=${clip.trimIn}:end=${clip.trimOut},asetpts=PTS-STARTPTS[a${i}]`
+    ).join('; ');
+
+    const concatInputs = preparedClips.map((_, i) => `[v${i}][a${i}]`).join('');
+    const concatFilter = `${concatInputs}concat=n=${preparedClips.length}:v=1:a=1[outv][outa]`;
+
+    const filterComplex = `${videoFilters}; ${audioFilters}; ${concatFilter}`;
+
+    args.push('-filter_complex', filterComplex);
+    args.push('-map', '[outv]');
+    args.push('-map', '[outa]');
+
+    // Add encoding options if not using source settings
+    if (resolution !== 'source') {
+      args.push('-c:v', codec);
+      args.push('-preset', 'medium');
+      args.push('-crf', this.getQualityCRF(quality));
+      
+      if (typeof resolution === 'string' && resolution !== 'source') {
+        args.push('-s', resolution);
+      }
+      
+      args.push('-c:a', audioCodec || 'aac', '-b:a', '128k');
+    } else {
+      // Use stream copy for no re-encoding
+      args.push('-c', 'copy');
+    }
+
+    if (container === 'mp4') {
+      args.push('-movflags', '+faststart');
+    }
+
+    args.push(outputPath);
+
+    return args;
+  }
+
+  getQualityCRF(quality) {
+    const qualityMap = {
+      'low': '28',
+      'medium': '23',
+      'high': '18',
+      'maximum': '15'
+    };
+    return qualityMap[quality] || '23';
+  }
 
   monitorProgress() {
     if (!this.currentExport) return;
@@ -153,7 +242,10 @@ class ExportService {
     }
 
     try {
-      // TODO: Implement actual cancellation logic here
+      if (this.currentExport.processId) {
+        this.ffmpegService.cancelProcess(this.currentExport.processId);
+      }
+
       this.cleanup();
 
       return {

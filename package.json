@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
-    "dev:electron": "wait-on http://localhost:5173 http://localhost:5174 && NODE_ENV=development electron .",
+    "dev:electron": "wait-on http://localhost:5173 && NODE_ENV=development electron .",
     "build": "npm run download-ffmpeg && vite build && electron-builder",
     "build:mac": "npm run download-ffmpeg && vite build && electron-builder --mac",
     "dist": "npm run download-ffmpeg && vite build && electron-builder --publish=never",

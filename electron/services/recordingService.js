@@ -1,28 +1,35 @@
-const { desktopCapturer } = require('electron');
+const { desktopCapturer, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
 class RecordingService {
   constructor() {
     this.isRecording = false;
-    this.mediaRecorder = null;
-    this.recordedChunks = [];
+    this.ffmpegProcess = null;
     this.outputPath = null;
   }
 
   async getScreenSources() {
     try {
+      console.log('Getting screen sources...');
       const sources = await desktopCapturer.getSources({
         types: ['screen', 'window'],
         thumbnailSize: { width: 150, height: 150 }
       });
       
-      return sources.map(source => ({
+      console.log('Raw sources from desktopCapturer:', sources);
+      
+      const mappedSources = sources.map(source => ({
         id: source.id,
         name: source.name,
         thumbnail: source.thumbnail.toDataURL()
       }));
+      
+      console.log('Mapped sources:', mappedSources);
+      return mappedSources;
     } catch (error) {
+      console.error('Error getting screen sources:', error);
       throw new Error(`Failed to get screen sources: ${error.message}`);
     }
   }
@@ -33,6 +40,8 @@ class RecordingService {
     }
 
     try {
+      console.log('Starting screen recording with options:', options);
+      
       const {
         sourceId,
         audio = true,
@@ -49,117 +58,156 @@ class RecordingService {
         throw new Error('Screen source not found');
       }
 
-      // Create constraints for getUserMedia
-      const constraints = {
-        audio: audio ? {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId
-          }
-        } : false,
-        video: video ? {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId,
-            minWidth: 1280,
-            minHeight: 720,
-            maxWidth: 1920,
-            maxHeight: 1080,
-            minFrameRate: frameRate,
-            maxFrameRate: frameRate
-          }
-        } : false
-      };
+      console.log('Found source:', source);
+      console.log('Source ID for FFmpeg:', sourceId);
+      console.log('Source ID type:', typeof sourceId);
+      console.log('Source ID length:', sourceId.length);
 
-      // Get media stream
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      // Set up MediaRecorder
-      const mimeType = this.getSupportedMimeType();
-      const mediaRecorderOptions = {
-        mimeType,
-        videoBitsPerSecond: quality === 'high' ? 5000000 : quality === 'medium' ? 2500000 : 1000000
-      };
+      // Generate output path
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      this.outputPath = path.join(
+        require('os').homedir(),
+        'Desktop',
+        `ClipForge_Recording_${timestamp}.mp4`
+      );
 
-      this.mediaRecorder = new MediaRecorder(stream, mediaRecorderOptions);
-      this.recordedChunks = [];
+      // Build FFmpeg command for screen recording
+      const ffmpegPath = this.getFFmpegPath();
+      const args = [
+        '-f', 'avfoundation', // macOS screen capture
+        '-capture_cursor', '1',
+        '-capture_mouse_clicks', '1',
+        '-i', `${sourceId}:0`, // Screen source ID with device index
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', quality === 'high' ? '18' : quality === 'medium' ? '23' : '28',
+        '-r', frameRate.toString(),
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-y' // Overwrite output file
+      ];
 
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          this.recordedChunks.push(event.data);
+      // Add audio if requested
+      if (audio) {
+        args.push('-c:a', 'aac', '-b:a', '128k');
+      } else {
+        args.push('-an');
+      }
+
+      args.push(this.outputPath);
+
+      console.log('FFmpeg command:', ffmpegPath, args.join(' '));
+
+      // Start FFmpeg process
+      this.ffmpegProcess = spawn(ffmpegPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      this.ffmpegProcess.on('error', (error) => {
+        console.error('FFmpeg process error:', error);
+        this.isRecording = false;
+        this.cleanup();
+      });
+
+      this.ffmpegProcess.on('exit', (code) => {
+        console.log('FFmpeg process exited with code:', code);
+        this.isRecording = false;
+        this.cleanup();
+      });
+
+      // Log FFmpeg output for debugging
+      this.ffmpegProcess.stdout.on('data', (data) => {
+        console.log('FFmpeg stdout:', data.toString());
+      });
+
+      this.ffmpegProcess.stderr.on('data', (data) => {
+        const errorOutput = data.toString();
+        console.log('FFmpeg stderr:', errorOutput);
+        
+        // Check for critical errors
+        if (errorOutput.includes('Invalid data') || errorOutput.includes('header parsing failed')) {
+          console.error('FFmpeg recording failed - file will be corrupted');
+          this.isRecording = false;
         }
-      };
+      });
 
-      this.mediaRecorder.onstop = () => {
-        this.saveRecording();
-        this.cleanup();
-      };
-
-      this.mediaRecorder.onerror = (error) => {
-        console.error('MediaRecorder error:', error);
-        this.cleanup();
-      };
-
-      // Start recording
-      this.mediaRecorder.start(1000); // Collect data every second
       this.isRecording = true;
+      console.log('Recording state set to true');
 
       return {
         success: true,
-        message: 'Screen recording started'
+        message: 'Screen recording started',
+        sourceId: sourceId,
+        outputPath: this.outputPath
       };
     } catch (error) {
+      console.error('Error starting screen recording:', error);
       this.cleanup();
       throw new Error(`Failed to start screen recording: ${error.message}`);
     }
   }
 
   async stopScreenRecording() {
-    if (!this.isRecording || !this.mediaRecorder) {
+    console.log('stopScreenRecording called, isRecording:', this.isRecording);
+    
+    if (!this.isRecording) {
       throw new Error('No recording in progress');
     }
 
     try {
-      this.mediaRecorder.stop();
+      console.log('Stopping screen recording...');
+      
+      if (this.ffmpegProcess) {
+        console.log('Killing FFmpeg process...');
+        // Send SIGINT to gracefully stop FFmpeg
+        this.ffmpegProcess.kill('SIGINT');
+        
+        // Wait for the process to finish
+        await new Promise((resolve) => {
+          this.ffmpegProcess.on('exit', (code) => {
+            console.log('FFmpeg process stopped with code:', code);
+            resolve();
+          });
+          // Timeout after 5 seconds
+          setTimeout(() => {
+            console.log('FFmpeg stop timeout, forcing kill');
+            this.ffmpegProcess.kill('SIGKILL');
+            resolve();
+          }, 5000);
+        });
+      }
+
       this.isRecording = false;
+      console.log('Recording state set to false');
+
+      // Wait a bit for file to be written
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Validate file exists and has content
+      if (fs.existsSync(this.outputPath)) {
+        const stats = fs.statSync(this.outputPath);
+        if (stats.size === 0) {
+          throw new Error('Recording file is empty - FFmpeg may have failed');
+        }
+        console.log('Recording file created successfully, size:', stats.size);
+      } else {
+        throw new Error('Recording file was not created');
+      }
 
       return {
         success: true,
-        message: 'Screen recording stopped'
+        message: 'Screen recording stopped',
+        outputPath: this.outputPath,
+        fileName: path.basename(this.outputPath)
       };
     } catch (error) {
+      console.error('Error stopping screen recording:', error);
+      this.isRecording = false;
       throw new Error(`Failed to stop screen recording: ${error.message}`);
     }
   }
 
-  async saveRecording() {
-    if (this.recordedChunks.length === 0) {
-      throw new Error('No recorded data to save');
-    }
-
-    try {
-      const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      
-      // Generate output path
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      this.outputPath = path.join(
-        require('os').homedir(),
-        'Desktop',
-        `ClipForge_Recording_${timestamp}.webm`
-      );
-
-      fs.writeFileSync(this.outputPath, buffer);
-
-      return {
-        success: true,
-        outputPath: this.outputPath,
-        fileSize: buffer.length
-      };
-    } catch (error) {
-      throw new Error(`Failed to save recording: ${error.message}`);
-    }
-  }
+  // saveRecording method removed - we now use FFmpeg to create files directly
 
   getSupportedMimeType() {
     const types = [
@@ -178,13 +226,24 @@ class RecordingService {
     return 'video/webm'; // Fallback
   }
 
+  getFFmpegPath() {
+    const isDev = process.env.NODE_ENV === 'development' || !require('electron').app.isPackaged;
+    
+    if (isDev) {
+      // Development: use FFmpeg from resources
+      return path.join(__dirname, '../resources/ffmpeg/ffmpeg-arm64');
+    } else {
+      // Production: use FFmpeg from app resources
+      return path.join(process.resourcesPath, 'ffmpeg/ffmpeg-arm64');
+    }
+  }
+
   cleanup() {
-    if (this.mediaRecorder && this.mediaRecorder.stream) {
-      this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    if (this.ffmpegProcess) {
+      this.ffmpegProcess.kill('SIGTERM');
+      this.ffmpegProcess = null;
     }
     
-    this.mediaRecorder = null;
-    this.recordedChunks = [];
     this.isRecording = false;
   }
 

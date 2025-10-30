@@ -23,48 +23,164 @@ class FFmpegService {
   async executeCommand(args, options = {}) {
     let currentProcessId = null;
 
-    const commandPromise = new Promise((resolve, reject) => {
-      // Check if FFmpeg binary exists
-      if (!fs.existsSync(this.ffmpegPath)) {
-        reject(new Error(`FFmpeg binary not found at ${this.ffmpegPath}`));
-        return;
-      }
-
-      const processId = Date.now().toString();
-      currentProcessId = processId;
-      const process = spawn(this.ffmpegPath, args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        ...options
-      });
-
-      this.activeProcesses.set(processId, process);
-
-      let stdout = '';
-      let stderr = '';
-
-      process.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      process.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      process.on('close', (code) => {
-        this.activeProcesses.delete(processId);
-        
-        if (code === 0) {
-          resolve({ stdout, stderr, code, processId });
-        } else {
-          reject(new Error(`FFmpeg process exited with code ${code}: ${stderr}`));
+    const commandPromise = new Promise(async (resolve, reject) => {
+      try {
+        // Check if FFmpeg binary exists
+        if (!fs.existsSync(this.ffmpegPath)) {
+          reject(new Error(`FFmpeg binary not found at ${this.ffmpegPath}`));
+          return;
         }
-      });
 
-      process.on('error', (error) => {
-        this.activeProcesses.delete(processId);
+        // Handle input data if provided
+        let tempInputPath = null;
+        let tempOutputPath = null;
+
+        if (options.inputData && options.inputFileName) {
+          tempInputPath = path.join(os.tmpdir(), options.inputFileName);
+
+          // Convert inputData to Buffer properly
+          // When Uint8Array is passed through IPC, it becomes a plain object with numeric keys
+          let buffer;
+          if (Buffer.isBuffer(options.inputData)) {
+            buffer = options.inputData;
+          } else if (options.inputData instanceof Uint8Array) {
+            buffer = Buffer.from(options.inputData);
+          } else if (Array.isArray(options.inputData)) {
+            buffer = Buffer.from(options.inputData);
+          } else if (typeof options.inputData === 'object') {
+            // Handle plain object with numeric keys (from IPC serialization)
+            const values = Object.values(options.inputData);
+            buffer = Buffer.from(values);
+          } else {
+            console.error('Unknown inputData type:', typeof options.inputData);
+            buffer = Buffer.from(options.inputData);
+          }
+
+          fs.writeFileSync(tempInputPath, buffer);
+          console.log('Created temporary input file:', tempInputPath);
+          console.log('File exists:', fs.existsSync(tempInputPath));
+          console.log('File size:', fs.statSync(tempInputPath).size, 'bytes');
+          console.log('Expected size:', buffer.length, 'bytes');
+
+          // Verify first few bytes to check file integrity
+          if (buffer.length > 0) {
+            const header = buffer.slice(0, Math.min(16, buffer.length));
+            console.log('File header (hex):', header.toString('hex'));
+          }
+
+          // Replace the input filename in args with the temp path
+          const inputIndex = args.indexOf(options.inputFileName);
+          if (inputIndex !== -1) {
+            args[inputIndex] = tempInputPath;
+          }
+        }
+
+        if (options.outputFileName) {
+          tempOutputPath = path.join(os.tmpdir(), options.outputFileName);
+          // Replace the output filename in args with the temp path
+          const outputIndex = args.lastIndexOf(options.outputFileName);
+          if (outputIndex !== -1) {
+            args[outputIndex] = tempOutputPath;
+          }
+        }
+
+        console.log('Final FFmpeg args:', args);
+        console.log('FFmpeg path:', this.ffmpegPath);
+        
+        const processId = Date.now().toString();
+        currentProcessId = processId;
+        const process = spawn(this.ffmpegPath, args, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          ...options
+        });
+
+        this.activeProcesses.set(processId, process);
+
+        let stdout = '';
+        let stderr = '';
+        let outputData = null;
+
+        process.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+
+        process.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        process.on('close', (code) => {
+          this.activeProcesses.delete(processId);
+
+          // Clean up temporary files
+          if (tempInputPath && fs.existsSync(tempInputPath)) {
+            fs.unlinkSync(tempInputPath);
+          }
+
+          if (code === 0) {
+            // Read output file if it exists
+            if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+              outputData = fs.readFileSync(tempOutputPath);
+              console.log('FFmpeg output file read:');
+              console.log('  - Size:', outputData.length, 'bytes');
+
+              // Verify output file has content
+              if (outputData.length === 0) {
+                console.error('FFmpeg output file is empty!');
+                if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+                  fs.unlinkSync(tempOutputPath);
+                }
+                reject(new Error('FFmpeg produced an empty output file'));
+                return;
+              }
+
+              // Verify MP4 header if output is MP4
+              if (tempOutputPath.endsWith('.mp4')) {
+                const header = outputData.slice(4, 8).toString('ascii');
+                console.log('  - MP4 ftyp header:', header);
+                if (!header.includes('ftyp')) {
+                  console.error('FFmpeg output does not have valid MP4 header!');
+                  console.error('  - First 32 bytes:', outputData.slice(0, 32).toString('hex'));
+                }
+              }
+
+              fs.unlinkSync(tempOutputPath);
+            }
+
+            resolve({
+              success: true,
+              stdout,
+              stderr,
+              code,
+              processId,
+              outputData: outputData ? Array.from(outputData) : null
+            });
+          } else {
+            // Clean up output file on error
+            if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+              fs.unlinkSync(tempOutputPath);
+            }
+            console.error('FFmpeg failed with code:', code);
+            console.error('FFmpeg stderr:', stderr);
+            reject(new Error(`FFmpeg process exited with code ${code}: ${stderr}`));
+          }
+        });
+
+        process.on('error', (error) => {
+          this.activeProcesses.delete(processId);
+          // Clean up temporary files on error
+          if (tempInputPath && fs.existsSync(tempInputPath)) {
+            fs.unlinkSync(tempInputPath);
+          }
+          if (tempOutputPath && fs.existsSync(tempOutputPath)) {
+            fs.unlinkSync(tempOutputPath);
+          }
+          reject(error);
+        });
+      } catch (error) {
         reject(error);
-      });
+      }
     });
+    
     commandPromise.processId = currentProcessId;
     return commandPromise;
   }

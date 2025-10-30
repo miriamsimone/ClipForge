@@ -1,5 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Ensure screen capture APIs are available
+if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
+  console.log('MediaDevices API available in preload');
+} else {
+  console.log('MediaDevices API not available in preload');
+}
+
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -13,8 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   executeFFmpeg: (args, options) => ipcRenderer.invoke('ffmpeg:execute', args, options),
   
   // Recording operations
-  startScreenRecording: (options) => ipcRenderer.invoke('recording:start-screen', options),
-  stopScreenRecording: () => ipcRenderer.invoke('recording:stop-screen'),
+  getScreenSources: () => ipcRenderer.invoke('recording:get-sources'),
+  saveRecording: (buffer, fileName) => ipcRenderer.invoke('recording:save-file', buffer, fileName),
   
   // Export operations
   startExport: (options) => ipcRenderer.invoke('export:start', options),

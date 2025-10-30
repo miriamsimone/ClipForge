@@ -15,6 +15,7 @@ const ExportDialog: React.FC = () => {
   const { isExporting, progress, error } = useSelector((state: RootState) => state.export);
   const { tracks } = useSelector((state: RootState) => state.timeline);
   const { clips: mediaClips } = useSelector((state: RootState) => state.media);
+  const timelineEmptyMessage = 'Add clips to the timeline before exporting.';
   const [outputPath, setOutputPath] = useState('~/Desktop/ClipForge_Export.mp4');
   const [container, setContainer] = useState<'mp4' | 'mov'>('mp4');
   const [resolution, setResolution] = useState<ResolutionOption>('1080p');
@@ -67,6 +68,13 @@ const ExportDialog: React.FC = () => {
       .filter((clip): clip is ExportTimelineClip => Boolean(clip && clip.filePath))
       .sort((a, b) => a.startTime - b.startTime);
   }, [tracks, mediaClips]);
+  const hasExportableClips = timelineClipsForExport.length > 0;
+
+  useEffect(() => {
+    if (hasExportableClips && formError === timelineEmptyMessage) {
+      setFormError(null);
+    }
+  }, [hasExportableClips, formError, timelineEmptyMessage]);
 
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -103,7 +111,7 @@ const ExportDialog: React.FC = () => {
 
   const handleStartExport = async () => {
     if (!timelineClipsForExport.length) {
-      setFormError('Add clips to the timeline before exporting.');
+      setFormError(timelineEmptyMessage);
       return;
     }
 
@@ -309,7 +317,9 @@ const ExportDialog: React.FC = () => {
                 <button 
                   className="btn btn-primary"
                   onClick={handleStartExport}
-                  disabled={timelineClipsForExport.length === 0 || isExporting}
+                  disabled={isExporting}
+                  aria-disabled={!hasExportableClips}
+                  title={!hasExportableClips ? timelineEmptyMessage : undefined}
                 >
                   Start Export
                 </button>

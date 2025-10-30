@@ -9,6 +9,8 @@ const MediaLibrary: React.FC = () => {
   const dispatch = useDispatch();
   const { clips, selectedClipId, isLoading } = useSelector((state: RootState) => state.media);
 
+  console.log('MediaLibrary rendering - clips:', clips.length, 'isLoading:', isLoading);
+
   const handleClipSelect = (clipId: string) => {
     dispatch(selectClip(clipId));
   };

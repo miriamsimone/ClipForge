@@ -24,16 +24,21 @@ mac:
     - target: dmg
       arch: ["x64", "arm64"]
   category: public.app-category.video
-  icon: electron/resources/icons/icon.icns
   entitlements: electron/resources/entitlements.mac.plist
   entitlementsInherit: electron/resources/entitlements.mac.plist
   hardenedRuntime: true
   gatekeeperAssess: false
   notarize: false
+  extendInfo:
+    NSMicrophoneUsageDescription: "ClipForge needs microphone access to record audio with your screen recordings"
+    NSCameraUsageDescription: "ClipForge needs camera access for video recording features"
+    NSScreenCaptureUsageDescription: "ClipForge needs screen recording access to capture your screen content"
+    com.apple.security.device.audio-input: true
+    com.apple.security.device.camera: true
+    com.apple.security.device.screen-capture: true
 
 dmg:
   title: ClipForge
-  icon: electron/resources/icons/icon.icns
   contents:
     - x: 130
       y: 220

@@ -1,3 +1,5 @@
+import { ScreenSource } from './recording';
+
 export interface ElectronAPI {
   // Media operations
   openFileDialog: () => Promise<{ canceled: boolean; filePaths: string[] }>;
@@ -7,10 +9,9 @@ export interface ElectronAPI {
   
   // FFmpeg operations
   executeFFmpeg: (args: string[], options?: any) => Promise<any>;
-  
   // Recording operations
-  startScreenRecording: (options: any) => Promise<any>;
-  stopScreenRecording: () => Promise<any>;
+  getScreenSources: () => Promise<ScreenSource[]>;
+  saveRecording: (buffer: ArrayBuffer, fileName: string) => Promise<{ outputPath: string; fileName: string }>;
   
   // Export operations
   startExport: (options: any) => Promise<any>;

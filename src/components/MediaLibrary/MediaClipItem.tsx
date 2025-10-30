@@ -57,7 +57,7 @@ const MediaClipItem: React.FC<MediaClipItemProps> = ({ clip, isSelected, onSelec
           <span>{formatFileSize(clip.fileSize)}</span>
         </div>
         <div className="media-clip-codec">
-          {clip.codec.toUpperCase()}
+          {clip.codec ? clip.codec.toUpperCase() : 'Unknown'}
           {clip.hasAudio && ' + Audio'}
         </div>
       </div>

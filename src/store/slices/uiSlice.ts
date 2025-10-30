@@ -17,8 +17,10 @@ const uiSlice = createSlice({
   initialState,
   reducers: {
     toggleRecordingPanel: (state) => {
+      console.log('toggleRecordingPanel called, current state:', state.showRecordingPanel);
       state.showRecordingPanel = !state.showRecordingPanel;
       state.activeModal = state.showRecordingPanel ? 'recording' : null;
+      console.log('toggleRecordingPanel updated, new state:', state.showRecordingPanel);
     },
     toggleExportDialog: (state) => {
       state.showExportDialog = !state.showExportDialog;

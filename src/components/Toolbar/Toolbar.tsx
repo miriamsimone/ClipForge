@@ -17,7 +17,9 @@ const Toolbar: React.FC = () => {
   };
 
   const handleStartRecording = () => {
+    console.log('Record button clicked! Dispatching toggleRecordingPanel...');
     dispatch(toggleRecordingPanel());
+    console.log('toggleRecordingPanel dispatched');
   };
 
   const handleExport = () => {

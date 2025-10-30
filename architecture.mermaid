@@ -9,12 +9,15 @@ graph TB
             Preview[Preview Player<br/>Video Playback]
             Recording[Recording Panel<br/>Screen/Webcam/Audio]
             Export[Export Dialog<br/>Config & Progress]
+            ErrorBoundary[Error Boundary<br/>Crash Recovery]
         end
         
         subgraph "State Management (Redux Toolkit)"
             MediaSlice[Media Slice<br/>Imported Clips]
             TimelineSlice[Timeline Slice<br/>Clips & Edits]
             PlaybackSlice[Playback Slice<br/>Current Time/State]
+            RecordingSlice[Recording Slice<br/>Record State]
+            UISlice[UI Slice<br/>Modals/Notifications]
         end
         
         subgraph "Custom Hooks"
@@ -23,6 +26,8 @@ graph TB
             UseRecording[useRecording<br/>Record Control]
             UsePlayback[usePlayback<br/>Playback Logic]
             UseExport[useExport<br/>Export Control]
+            UseKeyboard[useKeyboardShortcuts<br/>Global Shortcuts]
+            UseNotifications[useNotifications<br/>Toast Messages]
         end
         
         subgraph "Utils & Helpers"
@@ -31,6 +36,30 @@ graph TB
             VideoMeta[Video Metadata<br/>Probe Info]
             TimeFormatter[Time Formatter<br/>Display Utils]
             KonvaRenderer[Konva Renderer<br/>Timeline Canvas]
+            WaveformGen[Waveform Generator<br/>Audio Visualization]
+            ErrorHandler[Error Handler<br/>Error Processing]
+        end
+        
+        subgraph "Recording Components"
+            ScreenRecorder[Screen Recorder<br/>Region Selection]
+            WebcamRecorder[Webcam Recorder<br/>Camera Preview]
+            AudioControls[Audio Controls<br/>Mic/System Audio]
+            RecordingControls[Recording Controls<br/>Start/Stop/Timer]
+        end
+        
+        subgraph "Timeline Operations"
+            SplitTool[Split Tool<br/>Clip Splitting]
+            DeleteTool[Delete Tool<br/>Remove Clips]
+            DuplicateTool[Duplicate Tool<br/>Copy Clips]
+            DragDrop[Drag & Drop<br/>Reorder Clips]
+        end
+        
+        subgraph "Playback Controls"
+            PlaybackControls[Playback Controls<br/>Play/Pause/Stop]
+            SpeedControls[Speed Controls<br/>0.5x-2x Speed]
+            FrameStepping[Frame Stepping<br/>Frame-by-Frame]
+            LoopToggle[Loop Toggle<br/>Repeat Playback]
+            VolumeControl[Volume Control<br/>Audio Level]
         end
     end
     
@@ -43,23 +72,27 @@ graph TB
             MediaCmd[Media Service<br/>Import/Probe/Thumbnail]
             RecordCmd[Recording Service<br/>Start/Stop/Save]
             ExportCmd[Export Service<br/>Encode/Progress]
+            LoggingCmd[Logging Service<br/>Error Reporting]
         end
         
         subgraph "Recording Module"
             ScreenRec[Screen Recorder<br/>Electron desktopCapturer]
             WebcamRec[Webcam Handler<br/>getUserMedia API]
             AudioRec[Audio Capture<br/>Mic + System Audio]
+            RecordingTimer[Recording Timer<br/>Duration Tracking]
         end
         
         subgraph "FFmpeg Module"
             FFmpegWrapper[FFmpeg Service<br/>Process Management]
             Encoder[Video Encoder<br/>Stitch & Export]
             Prober[Media Prober<br/>Extract Metadata]
+            AudioProcessor[Audio Processor<br/>Waveform Generation]
         end
         
         subgraph "File System"
             FileIO[File I/O<br/>Node.js fs API]
             TempFiles[Temp File Manager<br/>Recording Cache]
+            LogFiles[Log Files<br/>Error Logs]
         end
     end
     
@@ -74,9 +107,10 @@ graph TB
     end
     
     subgraph "File System"
-        UserFiles[User Video Files<br/>MOV Format]
+        UserFiles[User Video Files<br/>MOV/MP4 Format]
         Exports[Exported Videos<br/>Final Output]
         Thumbnails[Thumbnail Cache<br/>.jpg files]
+        Recordings[Recording Cache<br/>Temp Files]
     end
     
     %% Frontend Connections
@@ -86,10 +120,12 @@ graph TB
     App --> Preview
     App --> Recording
     App --> Export
+    App --> ErrorBoundary
     
     Toolbar --> UseMediaImport
     Toolbar --> UseRecording
     Toolbar --> UseExport
+    Toolbar --> UseKeyboard
     
     MediaLib --> MediaSlice
     MediaLib --> FileHandlers
@@ -98,11 +134,24 @@ graph TB
     Timeline --> TimelineSlice
     Timeline --> UseTimeline
     Timeline --> KonvaRenderer
+    Timeline --> SplitTool
+    Timeline --> DeleteTool
+    Timeline --> DuplicateTool
+    Timeline --> DragDrop
     
     Preview --> PlaybackSlice
     Preview --> UsePlayback
+    Preview --> PlaybackControls
+    Preview --> SpeedControls
+    Preview --> FrameStepping
+    Preview --> LoopToggle
+    Preview --> VolumeControl
     
     Recording --> UseRecording
+    Recording --> ScreenRecorder
+    Recording --> WebcamRecorder
+    Recording --> AudioControls
+    Recording --> RecordingControls
     
     Export --> UseExport
     
@@ -110,10 +159,33 @@ graph TB
     UseMediaImport --> MediaSlice
     UseTimeline --> TimelineSlice
     UsePlayback --> PlaybackSlice
+    UseRecording --> RecordingSlice
+    UseNotifications --> UISlice
     
     %% Utils Connections
     ThumbnailGen --> VideoMeta
     FileHandlers --> VideoMeta
+    WaveformGen --> AudioProcessor
+    ErrorHandler --> LoggingCmd
+    
+    %% Recording Component Connections
+    ScreenRecorder --> UseRecording
+    WebcamRecorder --> UseRecording
+    AudioControls --> UseRecording
+    RecordingControls --> UseRecording
+    
+    %% Timeline Operation Connections
+    SplitTool --> UseTimeline
+    DeleteTool --> UseTimeline
+    DuplicateTool --> UseTimeline
+    DragDrop --> UseTimeline
+    
+    %% Playback Control Connections
+    PlaybackControls --> UsePlayback
+    SpeedControls --> UsePlayback
+    FrameStepping --> UsePlayback
+    LoopToggle --> UsePlayback
+    VolumeControl --> UsePlayback
     
     %% IPC Bridge Connections
     UseMediaImport -.Electron IPC.-> IPC
@@ -121,10 +193,13 @@ graph TB
     UseExport -.Electron IPC.-> IPC
     ThumbnailGen -.Electron IPC.-> IPC
     VideoMeta -.Electron IPC.-> IPC
+    WaveformGen -.Electron IPC.-> IPC
+    ErrorHandler -.Electron IPC.-> IPC
     
     IPC -.Services.-> MediaCmd
     IPC -.Services.-> RecordCmd
     IPC -.Services.-> ExportCmd
+    IPC -.Services.-> LoggingCmd
     
     %% Backend Service Connections
     MediaCmd --> FFmpegWrapper
@@ -134,15 +209,20 @@ graph TB
     RecordCmd --> ScreenRec
     RecordCmd --> WebcamRec
     RecordCmd --> AudioRec
+    RecordCmd --> RecordingTimer
     RecordCmd --> TempFiles
     
     ExportCmd --> Encoder
     ExportCmd --> FileIO
     
+    LoggingCmd --> LogFiles
+    LoggingCmd --> FileIO
+    
     %% FFmpeg Connections
     FFmpegWrapper --> FFmpeg
     Encoder --> FFmpeg
     Prober --> FFmpeg
+    AudioProcessor --> FFmpeg
     
     %% Platform Connections
     FileIO --> MacOS
@@ -150,13 +230,16 @@ graph TB
     %% Web API Connections
     WebcamRec -.Browser API.-> WebAPIs
     ScreenRec -.Electron API.-> MacOS
+    AudioRec -.Browser API.-> WebAPIs
     
     %% File System Connections
     FileIO --> UserFiles
     FileIO --> Exports
     FileIO --> Thumbnails
+    FileIO --> Recordings
     
     MediaCmd --> Thumbnails
+    RecordCmd --> Recordings
     
     %% Styling
     classDef frontend fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
@@ -164,14 +247,23 @@ graph TB
     classDef external fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
     classDef storage fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
     classDef ipc fill:#fce4ec,stroke:#c2185b,stroke-width:3px
+    classDef recording fill:#fff8e1,stroke:#f9a825,stroke-width:2px
+    classDef timeline fill:#e8f5e8,stroke:#4caf50,stroke-width:2px
+    classDef playback fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
     
-    class App,Toolbar,MediaLib,Timeline,Preview,Recording,Export,MediaSlice,TimelineSlice,PlaybackSlice,UseMediaImport,UseTimeline,UseRecording,UsePlayback,UseExport,FileHandlers,ThumbnailGen,VideoMeta,TimeFormatter,KonvaRenderer frontend
+    class App,Toolbar,MediaLib,Timeline,Preview,Recording,Export,ErrorBoundary,MediaSlice,TimelineSlice,PlaybackSlice,RecordingSlice,UISlice,UseMediaImport,UseTimeline,UseRecording,UsePlayback,UseExport,UseKeyboard,UseNotifications,FileHandlers,ThumbnailGen,VideoMeta,TimeFormatter,KonvaRenderer,WaveformGen,ErrorHandler frontend
     
-    class MediaCmd,RecordCmd,ExportCmd,ScreenRec,WebcamRec,AudioRec,FFmpegWrapper,Encoder,Prober,FileIO,TempFiles backend
+    class MediaCmd,RecordCmd,ExportCmd,LoggingCmd,ScreenRec,WebcamRec,AudioRec,RecordingTimer,FFmpegWrapper,Encoder,Prober,AudioProcessor,FileIO,TempFiles,LogFiles backend
     
     class FFmpeg,MacOS,WebAPIs external
     
-    class UserFiles,Exports,Thumbnails storage
+    class UserFiles,Exports,Thumbnails,Recordings storage
     
     class IPC ipc
+    
+    class ScreenRecorder,WebcamRecorder,AudioControls,RecordingControls recording
+    
+    class SplitTool,DeleteTool,DuplicateTool,DragDrop timeline
+    
+    class PlaybackControls,SpeedControls,FrameStepping,LoopToggle,VolumeControl playback
 ```

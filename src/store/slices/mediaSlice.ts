@@ -91,6 +91,11 @@ const mediaSlice = createSlice({
         Object.assign(clip, updates);
       }
     },
+    addMediaClip: (state, action: PayloadAction<MediaClip>) => {
+      console.log('addMediaClip called with:', action.payload);
+      state.clips.push(action.payload);
+      console.log('Media clips after adding:', state.clips.length);
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -120,5 +125,5 @@ const mediaSlice = createSlice({
   },
 });
 
-export const { selectClip, removeClip, clearError, updateClip } = mediaSlice.actions;
+export const { selectClip, removeClip, clearError, updateClip, addMediaClip } = mediaSlice.actions;
 export default mediaSlice.reducer;

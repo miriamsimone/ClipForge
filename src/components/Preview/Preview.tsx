@@ -182,8 +182,76 @@ const Preview: React.FC = () => {
       dispatch(setPlayheadPosition(playheadPx));
     }
 
+    // Check if we've reached the end of the current clip
     if (currentTrimmedDuration > 0 && relativeTime >= currentTrimmedDuration - 0.002) {
-      advanceToClip(currentClipIndex + 1);
+      // Check if there's a next clip
+      const nextIndex = currentClipIndex + 1;
+
+      if (nextIndex >= timelineClips.length) {
+        // No more clips, stop playback
+        const finalTime = timelineDuration;
+        const finalPx = finalTime * pixelsPerSecond;
+        setCurrentClipIndex(Math.max(0, timelineClips.length - 1));
+        setCurrentTime(finalTime);
+        lastTimelineTimeRef.current = finalTime;
+        lastDispatchedPlayheadRef.current = finalPx;
+        dispatch(setPlayheadPosition(finalPx));
+        dispatch(setPlaying(false));
+        return;
+      }
+
+      const nextClip = timelineClips[nextIndex];
+      const currentClipEndTime = currentClipOffset + currentTrimmedDuration;
+      const nextClipStartTime = clipOffsets[nextIndex] ?? 0;
+      const gapDuration = nextClipStartTime - currentClipEndTime;
+
+      // If there's a gap, pause video but keep playback active to animate through gap
+      if (gapDuration > 0.05) {
+        console.log('Gap detected:', {
+          currentClipEndTime,
+          nextClipStartTime,
+          gapDuration
+        });
+
+        video.pause();
+
+        // Calculate how long the gap should take at 1x speed (in milliseconds)
+        const gapDurationMs = gapDuration * 1000;
+        const startTime = performance.now();
+        const startTimelineTime = currentClipEndTime;
+
+        // Continue animating playhead through the gap
+        const animateGap = () => {
+          const elapsed = performance.now() - startTime;
+          const progress = Math.min(elapsed / gapDurationMs, 1.0);
+          const newTime = startTimelineTime + (gapDuration * progress);
+          const newPx = newTime * pixelsPerSecond;
+
+          setCurrentTime(newTime);
+          lastTimelineTimeRef.current = newTime;
+          lastDispatchedPlayheadRef.current = newPx;
+          dispatch(setPlayheadPosition(newPx));
+
+          console.log('Animating gap:', {
+            elapsed,
+            progress,
+            newTime,
+            nextClipStartTime
+          });
+
+          // If we've reached the next clip, start playing it
+          if (progress >= 1.0 || newTime >= nextClipStartTime - 0.01) {
+            console.log('Gap animation complete, advancing to next clip');
+            advanceToClip(nextIndex);
+          } else if (isPlaying) {
+            requestAnimationFrame(animateGap);
+          }
+        };
+        requestAnimationFrame(animateGap);
+      } else {
+        // No gap, immediately advance to next clip
+        advanceToClip(nextIndex);
+      }
     }
   }, [
     currentTrimIn,
@@ -193,6 +261,10 @@ const Preview: React.FC = () => {
     currentTrimmedDuration,
     advanceToClip,
     currentClipIndex,
+    timelineClips,
+    clipOffsets,
+    timelineDuration,
+    isPlaying,
   ]);
 
   useEffect(() => {

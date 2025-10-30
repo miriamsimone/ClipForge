@@ -106,9 +106,9 @@
 }
 
 .timeline-clips {
-  display: flex;
-  height: 100%;
   position: relative;
+  height: 100%;
+  min-width: 100%;
 }
 
 .timeline-drop-zone {
@@ -128,15 +128,17 @@
 .timeline-clip {
   background: linear-gradient(135deg, rgba(0, 122, 255, 0.85), rgba(0, 122, 255, 0.65));
   border-radius: 4px;
-  margin: 2px;
+  margin: 2px 0;
   font-size: 10px;
   color: white;
   min-width: 0;
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  height: calc(100% - 4px);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   cursor: default;
   user-select: none;
@@ -149,6 +151,19 @@
 .timeline-clip--selected {
   border: 2px solid #FFD60A !important;
   box-shadow: 0 0 8px rgba(255, 214, 10, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.timeline-clip--dragging {
+  opacity: 0.5;
+  cursor: grabbing !important;
+}
+
+.timeline-clip:not(.timeline-clip--dragging) {
+  cursor: grab;
+}
+
+.timeline-clip:active:not(.timeline-clip--dragging) {
+  cursor: grabbing;
 }
 
 .timeline-playhead {

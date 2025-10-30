@@ -88,9 +88,66 @@ const Timeline: React.FC = () => {
     };
   }, [isScrubbing, updatePlayheadFromClientX]);
 
+  const calculateSnapPosition = (targetTime: number, targetTrack: typeof tracks[0], excludeClipId?: string): number => {
+    if (!tracks || tracks.length === 0) return targetTime;
+
+    const snapThreshold = 0.2; // 0.2 seconds snap threshold
+    let snappedTime = targetTime;
+    let minDistance = snapThreshold;
+
+    // Check all clips in all tracks for snap points
+    tracks.forEach(track => {
+      track.clips.forEach(clip => {
+        if (clip.id === excludeClipId) return; // Don't snap to self
+
+        const clipStart = clip.startTime || 0;
+        const clipEnd = clipStart + (clip.duration || 0);
+
+        // Check snap to clip start
+        const distanceToStart = Math.abs(targetTime - clipStart);
+        if (distanceToStart < minDistance) {
+          minDistance = distanceToStart;
+          snappedTime = clipStart;
+        }
+
+        // Check snap to clip end
+        const distanceToEnd = Math.abs(targetTime - clipEnd);
+        if (distanceToEnd < minDistance) {
+          minDistance = distanceToEnd;
+          snappedTime = clipEnd;
+        }
+      });
+    });
+
+    // Snap to timeline start (0)
+    if (Math.abs(targetTime) < snapThreshold) {
+      snappedTime = 0;
+    }
+
+    return Math.max(0, snappedTime); // Don't allow negative times
+  };
+
   const handleDragOver = (e: React.DragEvent, trackId: number) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+
+    const data = e.dataTransfer.types.includes('application/json')
+      ? e.dataTransfer.getData('application/json')
+      : null;
+
+    if (data) {
+      try {
+        const parsed = JSON.parse(data);
+        // Set different drop effects for different drag types
+        if (parsed.type === 'timeline-clip') {
+          e.dataTransfer.dropEffect = 'move';
+        } else {
+          e.dataTransfer.dropEffect = 'copy';
+        }
+      } catch {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    }
+
     setDragOverTrackId(trackId);
   };
 
@@ -105,19 +162,82 @@ const Timeline: React.FC = () => {
 
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/json'));
-      if (data.type === 'media-clip' && data.mediaClip) {
+
+      // Use the timeline-content container bounds (the main scrollable area)
+      if (!timelineContentRef.current) {
+        console.error('Timeline content ref not available');
+        return;
+      }
+
+      const timelineRect = timelineContentRef.current.getBoundingClientRect();
+      const scrollLeft = timelineContentRef.current.scrollLeft;
+
+      // Handle timeline clip reordering
+      if (data.type === 'timeline-clip') {
+        const { clipId, trackId: fromTrackId, clip: draggedClip, dragOffsetSeconds = 0 } = data;
+
+        // Calculate drop position relative to timeline-content
+        const relativeX = e.clientX - timelineRect.left + scrollLeft;
+        const cursorTimeSeconds = relativeX / pixelsPerSecond;
+
+        // Adjust for where the user grabbed the clip
+        const dropTimeSeconds = cursorTimeSeconds - dragOffsetSeconds;
+
+        // Apply snapping
+        const targetTrack = tracks.find(t => t.id === trackId);
+        const snappedTime = calculateSnapPosition(dropTimeSeconds, targetTrack!, clipId);
+
+        console.log('Dropping clip:', {
+          clipId,
+          fromTrackId,
+          toTrackId: trackId,
+          cursorTimeSeconds,
+          dragOffsetSeconds,
+          dropTimeSeconds,
+          snappedTime
+        });
+
+        // Dispatch move action
+        dispatch(removeClip({ trackId: fromTrackId, clipId }));
+        dispatch(addClip({
+          trackId,
+          clip: {
+            ...draggedClip,
+            startTime: snappedTime,
+            track: trackId
+          }
+        }));
+      }
+      // Handle new media clip from library
+      else if (data.type === 'media-clip' && data.mediaClip) {
         const mediaClip: MediaClip = data.mediaClip;
-        const targetTrack = tracks.find(track => track.id === trackId);
-        const nextStartTime = targetTrack
-          ? targetTrack.clips.reduce((total, clip) => total + (clip.duration || 0), 0)
-          : 0;
+
+        // Calculate drop position relative to timeline-content
+        const relativeX = e.clientX - timelineRect.left + scrollLeft;
+        const dropTimeSeconds = Math.max(0, relativeX / pixelsPerSecond);
+
+        console.log('Dropping new media clip:', {
+          clientX: e.clientX,
+          timelineRectLeft: timelineRect.left,
+          scrollLeft,
+          relativeX,
+          dropTimeSeconds,
+          pixelsPerSecond,
+          message: 'Calculated relative to timeline-content container'
+        });
+
+        // Apply snapping for new clips too
+        const targetTrack = tracks.find(t => t.id === trackId);
+        const snappedTime = calculateSnapPosition(dropTimeSeconds, targetTrack!);
+
+        console.log('After snapping:', snappedTime);
 
         // Create timeline clip from media clip
         const timelineClip: TimelineClip = {
           id: `timeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           mediaClipId: mediaClip.id,
           track: trackId,
-          startTime: nextStartTime,
+          startTime: snappedTime,
           duration: mediaClip.duration,
           trimIn: 0,
           trimOut: mediaClip.duration,
@@ -305,12 +425,9 @@ const Timeline: React.FC = () => {
       >
         <div className="timeline-tracks">
           {tracks.map((track) => (
-            <div 
-              key={track.id} 
+            <div
+              key={track.id}
               className={`timeline-track ${dragOverTrackId === track.id ? 'drag-over' : ''}`}
-              onDragOver={(e) => handleDragOver(e, track.id)}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, track.id)}
             >
               <div className="timeline-track-header">
                 <span className="track-name">{track.name}</span>
@@ -319,7 +436,12 @@ const Timeline: React.FC = () => {
                   <button className="track-btn">🔒</button>
                 </div>
               </div>
-              <div className="timeline-track-content">
+              <div
+                className="timeline-track-content"
+                onDragOver={(e) => handleDragOver(e, track.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, track.id)}
+              >
                 <div className="timeline-clips">
                   {track.clips.map((clip) => (
                     <TimelineClipItem

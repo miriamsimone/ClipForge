@@ -137,8 +137,15 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
   const isPreviewActive = previewTrim !== null;
   const visualWidthDuration = isPreviewActive ? previewDuration : baseDuration;
   const visualWidth = Math.max(visualWidthDuration * pixelsPerSecond, minWidth);
-  const leftOffset = isPreviewActive ? Math.max(0, leftDelta * pixelsPerSecond) : 0;
+
+  // Calculate position based on startTime (for absolute positioning)
+  const clipStartPosition = (clip.startTime || 0) * pixelsPerSecond;
+  const trimOffset = isPreviewActive ? Math.max(0, leftDelta * pixelsPerSecond) : 0;
+  const clipLeftPosition = clipStartPosition + trimOffset;
+
   const clipLabel = mediaClip?.fileName ?? clip.mediaClipId;
+
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleClipClick = (event: React.MouseEvent) => {
     if (event.button !== 0) return; // Only handle left click
@@ -149,6 +156,49 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
     } else {
       dispatch(selectClip(clip.id));
     }
+  };
+
+  const handleDragStart = (event: React.DragEvent) => {
+    // Don't allow dragging if we're resizing
+    if (resizeStateRef.current) {
+      event.preventDefault();
+      return;
+    }
+
+    setIsDragging(true);
+
+    // Select clip if not already selected
+    if (!isSelected) {
+      dispatch(selectClip(clip.id));
+    }
+
+    // Calculate offset within the clip where the drag started
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const offsetTimeSeconds = offsetX / pixelsPerSecond;
+
+    // Store clip data for drop handler
+    const dragData = {
+      type: 'timeline-clip',
+      clipId: clip.id,
+      trackId: trackId,
+      clip: clip,
+      dragOffsetSeconds: offsetTimeSeconds // Store the offset where user grabbed the clip
+    };
+
+    event.dataTransfer.setData('application/json', JSON.stringify(dragData));
+    event.dataTransfer.effectAllowed = 'move';
+
+    // Set drag image to show we're moving a clip
+    const dragImage = event.currentTarget.cloneNode(true) as HTMLElement;
+    dragImage.style.opacity = '0.7';
+    document.body.appendChild(dragImage);
+    event.dataTransfer.setDragImage(dragImage, offsetX, 20);
+    setTimeout(() => document.body.removeChild(dragImage), 0);
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {
@@ -232,15 +282,17 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
   return (
     <>
       <div
-        className={`timeline-clip ${isSelected ? 'timeline-clip--selected' : ''}`}
+        className={`timeline-clip ${isSelected ? 'timeline-clip--selected' : ''} ${isDragging ? 'timeline-clip--dragging' : ''}`}
         style={{
+          left: `${clipLeftPosition}px`,
           width: `${visualWidth}px`,
-          flexBasis: `${visualWidth}px`,
-          marginLeft: `${leftOffset}px`,
         }}
         title={clipLabel}
+        draggable={!resizeStateRef.current}
         onClick={handleClipClick}
         onContextMenu={handleContextMenu}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
       >
         <div
           className="timeline-clip-handle timeline-clip-handle--start"

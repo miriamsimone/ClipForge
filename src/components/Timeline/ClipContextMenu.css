@@ -1,0 +1,70 @@
+.clip-context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 200px;
+  padding: 4px 0;
+  animation: contextMenuFadeIn 0.15s ease-out;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.context-menu-item {
+  width: 100%;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.1s;
+}
+
+.context-menu-item:hover:not(.disabled) {
+  background-color: #0d7377;
+}
+
+.context-menu-item.disabled {
+  color: #666;
+  cursor: not-allowed;
+}
+
+.context-menu-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-menu-icon {
+  font-size: 14px;
+  width: 16px;
+  display: inline-block;
+}
+
+.context-menu-shortcut {
+  font-size: 11px;
+  color: #999;
+  margin-left: 16px;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: #444;
+  margin: 4px 0;
+}

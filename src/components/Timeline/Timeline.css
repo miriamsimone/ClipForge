@@ -26,6 +26,14 @@
 .timeline-controls {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.timeline-divider {
+  width: 1px;
+  height: 24px;
+  background-color: #4a4a4a;
+  margin: 0 4px;
 }
 
 .timeline-content {
@@ -136,6 +144,11 @@
 
 .timeline-clip:hover {
   border-color: rgba(255, 255, 255, 0.3);
+}
+
+.timeline-clip--selected {
+  border: 2px solid #FFD60A !important;
+  box-shadow: 0 0 8px rgba(255, 214, 10, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .timeline-playhead {

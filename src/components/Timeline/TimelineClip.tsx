@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { TimelineClip as TimelineClipType } from '../../types/timeline';
-import { updateClip } from '../../store/slices/timelineSlice';
+import { updateClip, selectClip, deselectClip, splitClip, duplicateClip, removeClip } from '../../store/slices/timelineSlice';
+import ClipContextMenu, { ContextMenuAction } from './ClipContextMenu';
 
 interface TimelineClipProps {
   clip: TimelineClipType;
@@ -20,6 +21,8 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
   const mediaClip = useSelector((state: RootState) =>
     state.media.clips.find(item => item.id === clip.mediaClipId)
   );
+  const { selectedClipIds, playheadPosition } = useSelector((state: RootState) => state.timeline);
+  const isSelected = selectedClipIds.includes(clip.id);
 
   const resizeStateRef = useRef<{
     edge: 'start' | 'end';
@@ -30,6 +33,7 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
     currentTrimOut: number;
   } | null>(null);
   const [previewTrim, setPreviewTrim] = useState<{ trimIn: number; trimOut: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   const sourceDuration = useMemo(() => {
     if (mediaClip?.duration) {
@@ -136,31 +140,133 @@ const TimelineClip: React.FC<TimelineClipProps> = ({ clip, trackId, pixelsPerSec
   const leftOffset = isPreviewActive ? Math.max(0, leftDelta * pixelsPerSecond) : 0;
   const clipLabel = mediaClip?.fileName ?? clip.mediaClipId;
 
+  const handleClipClick = (event: React.MouseEvent) => {
+    if (event.button !== 0) return; // Only handle left click
+    event.stopPropagation();
+
+    if (isSelected) {
+      dispatch(deselectClip(clip.id));
+    } else {
+      dispatch(selectClip(clip.id));
+    }
+  };
+
+  const handleContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Select clip if not already selected
+    if (!isSelected) {
+      dispatch(selectClip(clip.id));
+    }
+
+    setContextMenu({ x: event.clientX, y: event.clientY });
+  };
+
+  const handleSplit = () => {
+    const clipStart = clip.startTime || 0;
+    const clipEnd = clipStart + (clip.duration || 0);
+
+    // Convert playhead position from pixels to seconds
+    const playheadTimeSeconds = playheadPosition / pixelsPerSecond;
+
+    // Check if playhead is within clip
+    if (playheadTimeSeconds >= clipStart && playheadTimeSeconds <= clipEnd) {
+      dispatch(splitClip({
+        trackId,
+        clipId: clip.id,
+        splitTime: playheadTimeSeconds
+      }));
+    } else {
+      console.warn('Playhead not within clip bounds for split');
+    }
+  };
+
+  const handleDuplicate = () => {
+    dispatch(duplicateClip({
+      trackId,
+      clipId: clip.id
+    }));
+  };
+
+  const handleDelete = () => {
+    dispatch(removeClip({
+      trackId,
+      clipId: clip.id
+    }));
+  };
+
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  const splitShortcut = isMac ? '⌘K or S' : 'Ctrl+K or S';
+  const duplicateShortcut = isMac ? '⌘D' : 'Ctrl+D';
+
+  const clipStart = clip.startTime || 0;
+  const clipEnd = clipStart + (clip.duration || 0);
+
+  // Convert playhead position from pixels to seconds for comparison
+  const playheadTimeSeconds = playheadPosition / pixelsPerSecond;
+  const canSplit = playheadTimeSeconds >= clipStart && playheadTimeSeconds <= clipEnd;
+
+  const contextMenuActions: ContextMenuAction[] = [
+    {
+      label: 'Split at Playhead',
+      icon: '✂️',
+      shortcut: splitShortcut,
+      onClick: handleSplit,
+      disabled: !canSplit
+    },
+    {
+      label: 'Duplicate',
+      icon: '📋',
+      shortcut: duplicateShortcut,
+      onClick: handleDuplicate
+    },
+    {
+      label: 'Delete',
+      icon: '🗑️',
+      shortcut: 'Del',
+      onClick: handleDelete
+    }
+  ];
+
   return (
-    <div
-      className="timeline-clip"
-      style={{
-        width: `${visualWidth}px`,
-        flexBasis: `${visualWidth}px`,
-        marginLeft: `${leftOffset}px`,
-      }}
-      title={clipLabel}
-    >
+    <>
       <div
-        className="timeline-clip-handle timeline-clip-handle--start"
-        onMouseDown={startResizing('start')}
-      />
-      <div className="timeline-clip-content">
-        <div className="timeline-clip-name">{clipLabel}</div>
-        <div className="timeline-clip-duration">
-          {visualWidthDuration.toFixed(2)}s
+        className={`timeline-clip ${isSelected ? 'timeline-clip--selected' : ''}`}
+        style={{
+          width: `${visualWidth}px`,
+          flexBasis: `${visualWidth}px`,
+          marginLeft: `${leftOffset}px`,
+        }}
+        title={clipLabel}
+        onClick={handleClipClick}
+        onContextMenu={handleContextMenu}
+      >
+        <div
+          className="timeline-clip-handle timeline-clip-handle--start"
+          onMouseDown={startResizing('start')}
+        />
+        <div className="timeline-clip-content">
+          <div className="timeline-clip-name">{clipLabel}</div>
+          <div className="timeline-clip-duration">
+            {visualWidthDuration.toFixed(2)}s
+          </div>
         </div>
+        <div
+          className="timeline-clip-handle timeline-clip-handle--end"
+          onMouseDown={startResizing('end')}
+        />
       </div>
-      <div
-        className="timeline-clip-handle timeline-clip-handle--end"
-        onMouseDown={startResizing('end')}
-      />
-    </div>
+
+      {contextMenu && (
+        <ClipContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          actions={contextMenuActions}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </>
   );
 };
 

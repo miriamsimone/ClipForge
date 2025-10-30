@@ -1,21 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
-import { addClip, setPixelsPerSecond, setPlayheadPosition, setPlaying, setZoom } from '../../store/slices/timelineSlice';
+import { addClip, setPixelsPerSecond, setPlayheadPosition, setPlaying, setZoom, splitClip, duplicateClip, removeClip } from '../../store/slices/timelineSlice';
 import { MediaClip } from '../../types/media';
 import { TimelineClip } from '../../types/timeline';
 import { MIN_PIXELS_PER_SECOND, PIXELS_PER_SECOND, TIMELINE_PADDING } from '../../constants/timeline';
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import './Timeline.css';
 import TimelineClipItem from './TimelineClip';
 import TimelinePlayhead from './TimelinePlayhead';
 
 const Timeline: React.FC = () => {
   const dispatch = useDispatch();
-  const { tracks, playheadPosition, isPlaying, zoom, pixelsPerSecond } = useSelector((state: RootState) => state.timeline);
+  const { tracks, playheadPosition, isPlaying, zoom, pixelsPerSecond, selectedClipIds } = useSelector((state: RootState) => state.timeline);
   const [dragOverTrackId, setDragOverTrackId] = useState<number | null>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
   const MIN_CLIP_WIDTH = 48;
   const [isScrubbing, setIsScrubbing] = useState(false);
+
+  // Enable keyboard shortcuts
+  useKeyboardShortcuts();
 
   const longestTrackDuration = useMemo(() => {
     // Account for sequential clips (flex layout) and scheduled start times
@@ -158,6 +162,92 @@ const Timeline: React.FC = () => {
     dispatch(setZoom(normalizedZoom));
   };
 
+  const handleSplit = () => {
+    if (selectedClipIds.length === 0) {
+      console.log('No clip selected for split');
+      return;
+    }
+
+    // Convert playhead position from pixels to seconds
+    const playheadTimeSeconds = playheadPosition / pixelsPerSecond;
+
+    // Find the selected clip and its track
+    for (const track of tracks) {
+      const clip = track.clips.find(c => selectedClipIds.includes(c.id));
+      if (clip) {
+        // Check if playhead is within the clip
+        const clipStart = clip.startTime || 0;
+        const clipEnd = clipStart + (clip.duration || 0);
+
+        if (playheadTimeSeconds >= clipStart && playheadTimeSeconds <= clipEnd) {
+          dispatch(splitClip({
+            trackId: track.id,
+            clipId: clip.id,
+            splitTime: playheadTimeSeconds
+          }));
+          return;
+        }
+      }
+    }
+    console.warn('Playhead not within selected clip bounds');
+  };
+
+  const handleDuplicate = () => {
+    if (selectedClipIds.length === 0) {
+      console.log('No clip selected for duplicate');
+      return;
+    }
+
+    // Duplicate the first selected clip
+    for (const track of tracks) {
+      const clip = track.clips.find(c => selectedClipIds.includes(c.id));
+      if (clip) {
+        dispatch(duplicateClip({
+          trackId: track.id,
+          clipId: clip.id
+        }));
+        return;
+      }
+    }
+  };
+
+  const handleDelete = () => {
+    if (selectedClipIds.length === 0) {
+      console.log('No clip selected for delete');
+      return;
+    }
+
+    // Delete all selected clips
+    for (const track of tracks) {
+      for (const clip of track.clips) {
+        if (selectedClipIds.includes(clip.id)) {
+          dispatch(removeClip({
+            trackId: track.id,
+            clipId: clip.id
+          }));
+        }
+      }
+    }
+  };
+
+  const hasSelection = selectedClipIds.length > 0;
+  const canSplit = useMemo(() => {
+    if (!hasSelection) return false;
+
+    // Convert playhead position from pixels to seconds
+    const playheadTimeSeconds = playheadPosition / pixelsPerSecond;
+
+    for (const track of tracks) {
+      const clip = track.clips.find(c => selectedClipIds.includes(c.id));
+      if (clip) {
+        const clipStart = clip.startTime || 0;
+        const clipEnd = clipStart + (clip.duration || 0);
+        return playheadTimeSeconds >= clipStart && playheadTimeSeconds <= clipEnd;
+      }
+    }
+    return false;
+  }, [hasSelection, tracks, selectedClipIds, playheadPosition, pixelsPerSecond]);
+
   return (
     <div className="timeline">
       <div className="timeline-header">
@@ -167,6 +257,31 @@ const Timeline: React.FC = () => {
             {isPlaying ? '⏸️' : '▶️'}
           </button>
           <button className="btn btn-secondary" onClick={handleStop}>⏹️</button>
+          <div className="timeline-divider"></div>
+          <button
+            className="btn btn-secondary"
+            onClick={handleSplit}
+            disabled={!canSplit}
+            title={canSplit ? "Split clip at playhead (S or Cmd+K)" : "Select clip and position playhead within it"}
+          >
+            ✂️
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleDuplicate}
+            disabled={!hasSelection}
+            title={hasSelection ? "Duplicate clip (Cmd+D)" : "Select a clip to duplicate"}
+          >
+            📋
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleDelete}
+            disabled={!hasSelection}
+            title={hasSelection ? "Delete clip (Del)" : "Select a clip to delete"}
+          >
+            🗑️
+          </button>
         </div>
         <div className="timeline-zoom">
           <label htmlFor="timeline-zoom-slider">Zoom</label>

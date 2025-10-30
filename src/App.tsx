@@ -1,4 +1,3 @@
-import React from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from './store';
 import Toolbar from './components/Toolbar/Toolbar';
@@ -14,8 +13,6 @@ function App() {
     showRecordingPanel: state.ui.showRecordingPanel,
     showExportDialog: state.ui.showExportDialog,
   }));
-
-  console.log('App rendering - showRecordingPanel:', showRecordingPanel, 'showExportDialog:', showExportDialog);
 
   return (
     <div className="app">
@@ -46,11 +43,6 @@ function App() {
       {/* Modals */}
       {showRecordingPanel && <RecordingPanel />}
       {showExportDialog && <ExportDialog />}
-      
-      {/* Debug info */}
-      <div style={{ position: 'fixed', top: '10px', right: '10px', background: 'black', color: 'white', padding: '10px', zIndex: 9999 }}>
-        Debug: showRecordingPanel={showRecordingPanel.toString()}, showExportDialog={showExportDialog.toString()}
-      </div>
     </div>
   );
 }

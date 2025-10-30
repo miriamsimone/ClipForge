@@ -27,6 +27,7 @@ class MediaService {
         codec: videoStream?.codec_name || 'unknown',
         audioCodec: audioStream?.codec_name || 'none',
         hasAudio: !!audioStream,
+        hasVideo: !!videoStream,
         format: ffmpegMetadata.format?.format_name || 'unknown'
       };
     } catch (error) {
@@ -115,6 +116,27 @@ class MediaService {
         valid: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Extract audio track from a video file and return metadata
+   * @param {string} videoPath - Path to input video file
+   * @param {string} outputPath - Optional: specific output path for audio file
+   * @param {string} audioFormat - Output format: 'mp3', 'aac', 'wav', 'm4a'
+   * @returns {Promise<Object>} Audio file metadata in MediaClip format
+   */
+  async extractAudioFromVideo(videoPath, outputPath = null, audioFormat = 'aac') {
+    try {
+      // Extract audio using FFmpeg
+      const extractedAudioPath = await this.ffmpegService.extractAudio(videoPath, outputPath, audioFormat);
+      
+      // Get metadata for the extracted audio file
+      const audioMetadata = await this.getMetadata(extractedAudioPath);
+      
+      return audioMetadata;
+    } catch (error) {
+      throw new Error(`Failed to extract audio from video: ${error.message}`);
     }
   }
 }

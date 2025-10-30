@@ -10,6 +10,7 @@ export interface MediaClip {
   codec: string;
   audioCodec: string;
   hasAudio: boolean;
+  hasVideo: boolean;
   format: string;
   thumbnail?: string;
   thumbnails?: ThumbnailFrame[];

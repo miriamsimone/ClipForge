@@ -3,7 +3,8 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../store';
 import { closeAllModals } from '../../store/slices/uiSlice';
 import { startExport, getExportProgress, cancelExport, resetExport } from '../../store/slices/exportSlice';
-import { ExportOptions, ExportTimelineClip } from '../../types/export';
+import { ExportOptions } from '../../types/export';
+import { createExportOptions, validateTimelineForExport } from '../../utils/exportPreparation';
 import './ExportDialog.css';
 
 type ResolutionOption = '480p' | '720p' | '1080p' | 'source';
@@ -13,7 +14,7 @@ type QualityOption = 'low' | 'medium' | 'high' | 'maximum';
 const ExportDialog: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { isExporting, progress, error } = useSelector((state: RootState) => state.export);
-  const { tracks } = useSelector((state: RootState) => state.timeline);
+  const timeline = useSelector((state: RootState) => state.timeline);
   const { clips: mediaClips } = useSelector((state: RootState) => state.media);
   const timelineEmptyMessage = 'Add clips to the timeline before exporting.';
   const [outputPath, setOutputPath] = useState('~/Desktop/ClipForge_Export.mp4');
@@ -22,6 +23,7 @@ const ExportDialog: React.FC = () => {
   const [framerate, setFramerate] = useState<FrameRateOption>('30');
   const [quality, setQuality] = useState<QualityOption>('high');
   const [formError, setFormError] = useState<string | null>(null);
+  const [timelineWarnings, setTimelineWarnings] = useState<string[]>([]);
 
   const handleClose = () => {
     if (isExporting) {
@@ -31,44 +33,17 @@ const ExportDialog: React.FC = () => {
     dispatch(closeAllModals());
   };
 
-  const timelineClipsForExport = useMemo<ExportTimelineClip[]>(() => {
-    const flattened = tracks.flatMap(track =>
-      track.clips.map(clip => {
-        const mediaClip = mediaClips.find(item => item.id === clip.mediaClipId);
-        if (!mediaClip) {
-          return null;
-        }
+  // Validate timeline for export and get warnings
+  const timelineValidation = useMemo(() => {
+    return validateTimelineForExport(timeline, mediaClips);
+  }, [timeline, mediaClips]);
 
-        const baseTrimIn = Math.max(0, Number(clip.trimIn ?? 0));
-        const baseDuration = clip.duration ?? mediaClip.duration ?? 0;
-        const rawTrimOut = Number.isFinite(clip.trimOut)
-          ? Number(clip.trimOut)
-          : baseTrimIn + baseDuration;
-        const boundedTrimOut = Math.max(baseTrimIn, Math.min(rawTrimOut, mediaClip.duration ?? rawTrimOut));
-        const trimmedDuration = Math.max(0, boundedTrimOut - baseTrimIn);
+  // Update warnings when timeline changes
+  useEffect(() => {
+    setTimelineWarnings(timelineValidation.warnings);
+  }, [timelineValidation.warnings]);
 
-        if (trimmedDuration <= 0.01) {
-          return null;
-        }
-
-        return {
-          id: clip.id,
-          filePath: mediaClip.filePath,
-          startTime: clip.startTime ?? 0,
-          duration: trimmedDuration,
-          trimIn: baseTrimIn,
-          trimOut: boundedTrimOut,
-          trackId: track.id,
-          hasAudio: Boolean(mediaClip.hasAudio),
-        } satisfies ExportTimelineClip;
-      })
-    );
-
-    return flattened
-      .filter((clip): clip is ExportTimelineClip => Boolean(clip && clip.filePath))
-      .sort((a, b) => a.startTime - b.startTime);
-  }, [tracks, mediaClips]);
-  const hasExportableClips = timelineClipsForExport.length > 0;
+  const hasExportableClips = timelineValidation.isValid;
 
   useEffect(() => {
     if (hasExportableClips && formError === timelineEmptyMessage) {
@@ -110,8 +85,8 @@ const ExportDialog: React.FC = () => {
   };
 
   const handleStartExport = async () => {
-    if (!timelineClipsForExport.length) {
-      setFormError(timelineEmptyMessage);
+    if (!timelineValidation.isValid) {
+      setFormError(timelineValidation.errors[0] || timelineEmptyMessage);
       return;
     }
 
@@ -133,7 +108,7 @@ const ExportDialog: React.FC = () => {
 
     const codec: ExportOptions['codec'] = 'libx264';
     const resolvedResolution = resolutionMap[resolution];
-    const exportOptions: ExportOptions = {
+    const baseExportOptions: Omit<ExportOptions, 'timelineClips'> = {
       outputPath: normalizedOutputPath,
       resolution: resolvedResolution,
       framerate: framerate === 'source' ? 'source' : Number(framerate) as 24 | 30 | 60,
@@ -141,8 +116,10 @@ const ExportDialog: React.FC = () => {
       codec,
       audioCodec: 'aac',
       container,
-      timelineClips: timelineClipsForExport,
     };
+
+    // Create export options with timeline analysis
+    const exportOptions = createExportOptions(baseExportOptions, timeline, mediaClips);
 
     try {
       await dispatch(startExport(exportOptions)).unwrap();
@@ -234,6 +211,16 @@ const ExportDialog: React.FC = () => {
               {error && !formError && (
                 <div className="export-error">
                   {error}
+                </div>
+              )}
+              {timelineWarnings.length > 0 && (
+                <div className="export-warnings">
+                  <h4>Timeline Warnings:</h4>
+                  <ul>
+                    {timelineWarnings.map((warning, index) => (
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
               <div className="option-group">

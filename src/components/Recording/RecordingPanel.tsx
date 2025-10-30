@@ -9,8 +9,8 @@ import {
   setRecordingDuration,
   resetRecording
 } from '../../store/slices/recordingSlice';
+import { addMediaClip } from '../../store/slices/mediaSlice';
 import { RecordingOptions } from '../../types/recording';
-import { ScreenRecorder } from '../../utils/mediaRecorder';
 import { SimpleWebcamRecorder } from '../../utils/simpleWebcamRecorder';
 import { VideoConverter } from '../../utils/videoConverter';
 import './RecordingPanel.css';
@@ -25,12 +25,11 @@ const RecordingPanel: React.FC = () => {
   const [countdown, setCountdown] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   
-  const screenRecorderRef = useRef<ScreenRecorder | null>(null);
+  // screenRecorderRef removed - now using backend service for screen recording
   const webcamRecorderRef = useRef<SimpleWebcamRecorder | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Debug: Log state changes
   useEffect(() => {
     console.log('Recording state changed:', { isRecording, duration, outputPath, error, isLoading });
   }, [isRecording, duration, outputPath, error, isLoading]);
@@ -86,20 +85,38 @@ const RecordingPanel: React.FC = () => {
       };
 
       if (recordingMode === 'screen') {
-        console.log('Initializing screen recorder...');
-        screenRecorderRef.current = new ScreenRecorder();
-        console.log('ScreenRecorder instance created');
+        console.log('Starting screen recording via backend service...');
         
-        console.log('Starting screen recording with options:', options);
-        await screenRecorderRef.current.startRecording('screen', options);
-        console.log('ScreenRecorder.startRecording completed');
+        // Get screen sources and let user select, or use first available
+        const sources = await window.electronAPI.getScreenSources();
+        console.log('Available screen sources:', sources);
+        
+        if (!sources || sources.length === 0) {
+          throw new Error('No screen sources available for recording');
+        }
+        
+        // For now, use the first screen source (or could show a dialog for selection)
+        const selectedSource = sources.find(s => s.name.toLowerCase().includes('screen')) || sources[0];
+        console.log('Selected source:', selectedSource);
+        
+        // Use backend recording service instead of browser APIs
+        const backendOptions = {
+          sourceId: selectedSource.id,
+          audio: includeAudio,
+          video: true,
+          frameRate: 30,
+          quality: quality
+        };
+        
+        const result = await window.electronAPI.startScreenRecording(backendOptions);
+        console.log('Backend recording started:', result);
       } else {
         console.log('Initializing webcam recorder...');
         webcamRecorderRef.current = new SimpleWebcamRecorder();
         console.log('SimpleWebcamRecorder instance created');
         
         console.log('Starting webcam recording with options:', options);
-        await webcamRecorderRef.current.startRecording(options, videoRef.current);
+        await webcamRecorderRef.current.startRecording(options, videoRef.current || undefined);
         console.log('SimpleWebcamRecorder.startRecording completed');
       }
       
@@ -116,7 +133,66 @@ const RecordingPanel: React.FC = () => {
   };
 
   const handleStopRecording = async () => {
-    const currentRecorder = recordingMode === 'screen' ? screenRecorderRef.current : webcamRecorderRef.current;
+    if (recordingMode === 'screen') {
+      // Use backend recording service
+      try {
+        console.log('Stopping screen recording via backend service...');
+        const result = await window.electronAPI.stopScreenRecording();
+        console.log('Backend recording stopped:', result);
+        
+        dispatch(stopRecording());
+        
+        // Add the recorded file to media library
+        if (result.outputPath) {
+          try {
+            const metadata = await window.electronAPI.getMetadata(result.outputPath);
+            console.log('Recording metadata:', metadata);
+            
+            const mediaClip = {
+              id: `recorded_${Date.now()}`,
+              filePath: result.outputPath,
+              fileName: result.fileName,
+              duration: metadata.duration || 0,
+              width: metadata.width || 1920,
+              height: metadata.height || 1080,
+              frameRate: metadata.frameRate || 30,
+              fileSize: metadata.fileSize || 0,
+              codec: metadata.codec || 'H264',
+              audioCodec: metadata.audioCodec || 'AAC',
+              hasAudio: metadata.hasAudio || includeAudio,
+              hasVideo: true,
+              format: metadata.format || 'mp4',
+              createdAt: Date.now()
+            };
+            
+            dispatch(addMediaClip(mediaClip));
+            console.log('Recording added to media library');
+            setShowPreview(true);
+            
+            // Close the recording panel after a short delay
+            setTimeout(() => {
+              dispatch(closeAllModals());
+            }, 2000);
+          } catch (metadataError) {
+            console.error('Failed to get metadata:', metadataError);
+            // Still show success
+            setShowPreview(true);
+            setTimeout(() => {
+              dispatch(closeAllModals());
+            }, 2000);
+          }
+        }
+        return;
+      } catch (error) {
+        console.error('Failed to stop screen recording:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        alert(`Failed to stop recording: ${errorMessage}`);
+        return;
+      }
+    }
+    
+    // Webcam recording uses the old approach
+    const currentRecorder = webcamRecorderRef.current;
     
     if (!currentRecorder) {
       console.log(`No ${recordingMode} recorder instance found`);
@@ -127,17 +203,8 @@ const RecordingPanel: React.FC = () => {
       console.log('Stopping recording...');
       console.log(`${recordingMode} recorder state:`, currentRecorder.getRecordingStatus());
       
-      // Create options for stop recording
-      const options: RecordingOptions = {
-        sourceId: recordingMode === 'screen' ? 'screen' : 'webcam',
-        audio: includeAudio,
-        video: true,
-        frameRate: 30,
-        quality: quality
-      };
-      
       // Stop recording and get blob
-      const originalBlob = await currentRecorder.stopRecording(options);
+      const originalBlob = await currentRecorder.stopRecording();
       dispatch(stopRecording());
 
       console.log('Recording stopped, blob:', originalBlob);
@@ -364,9 +431,6 @@ const RecordingPanel: React.FC = () => {
                   </div>
                 </div>
                 
-                <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                  Debug: isRecording={isRecording.toString()}, isLoading={isLoading.toString()}
-                </div>
               </div>
 
               {error && (

@@ -4,7 +4,7 @@ import { ExportState, ExportOptions, ExportProgress, ExportSession } from '../..
 // Async thunks
 export const startExport = createAsyncThunk(
   'export/start',
-  async (options: ExportOptions) => {
+  async (options: ExportOptions & { timelineData?: any }) => {
     const result = await window.electronAPI.startExport(options);
     return { result, options };
   }

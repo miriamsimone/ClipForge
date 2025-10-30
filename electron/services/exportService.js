@@ -23,6 +23,7 @@ class ExportService {
     try {
       const {
         timelineClips = [],
+        timelineData = null, // New parameter for timeline analysis
         outputPath,
         resolution = '1920x1080',
         framerate = 30,
@@ -63,6 +64,7 @@ class ExportService {
             duration,
             startTime: Number(clip.startTime ?? 0),
             hasAudio: Boolean(clip.hasAudio),
+            hasVideo: Boolean(clip.hasVideo ?? true), // Default to true for backward compatibility
           };
         })
         .filter(Boolean)
@@ -80,8 +82,12 @@ class ExportService {
         outputPath: resolvedOutputPath
       };
 
-      // Build FFmpeg command using filter_complex approach
-      const ffmpegArgs = this.buildFFmpegCommand(preparedClips, resolvedOutputPath, options);
+      // Build FFmpeg command with timeline analysis
+      const exportOptions = {
+        ...options,
+        timelineData
+      };
+      const ffmpegArgs = this.buildFFmpegCommand(preparedClips, resolvedOutputPath, exportOptions);
 
       console.log('FFmpeg command:', ffmpegArgs.join(' '));
 
@@ -141,6 +147,28 @@ class ExportService {
       quality = 'high',
       codec = 'libx264',
       audioCodec = 'aac',
+      container = 'mp4',
+      timelineData = null // New parameter for timeline analysis
+    } = options;
+
+    const args = ['-y']; // Overwrite output file
+
+    // If we have timeline data with gaps, use the new multi-track approach
+    if (timelineData && timelineData.gaps && timelineData.gaps.length > 0) {
+      return this.buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData);
+    }
+
+    // Original single-track approach for backward compatibility
+    return this.buildSingleTrackFFmpegCommand(preparedClips, outputPath, options);
+  }
+
+  buildSingleTrackFFmpegCommand(preparedClips, outputPath, options) {
+    const {
+      resolution = '1920x1080',
+      framerate = 30,
+      quality = 'high',
+      codec = 'libx264',
+      audioCodec = 'aac',
       container = 'mp4'
     } = options;
 
@@ -184,6 +212,117 @@ class ExportService {
       // Use stream copy for no re-encoding
       args.push('-c', 'copy');
     }
+
+    if (container === 'mp4') {
+      args.push('-movflags', '+faststart');
+    }
+
+    args.push(outputPath);
+
+    return args;
+  }
+
+  buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData) {
+    const {
+      resolution = '1920x1080',
+      framerate = 30,
+      quality = 'high',
+      codec = 'libx264',
+      audioCodec = 'aac',
+      container = 'mp4'
+    } = options;
+
+    const args = ['-y']; // Overwrite output file
+    const totalDuration = timelineData.totalDuration;
+    const gaps = timelineData.gaps || [];
+    const segments = timelineData.segments || [];
+
+    // Add input files
+    preparedClips.forEach(clip => {
+      args.push('-i', clip.filePath);
+    });
+
+    // Create a color source for black frames
+    args.push('-f', 'lavfi', '-i', `color=black:size=${resolution}:duration=${totalDuration}:rate=${framerate}`);
+
+    // Create a silence source for audio gaps
+    args.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100`);
+
+    const colorInputIndex = preparedClips.length;
+    const silenceInputIndex = preparedClips.length + 1;
+
+    // Build complex filter for multi-track composition
+    const filters = [];
+    let inputIndex = 0;
+
+    // Process each clip
+    preparedClips.forEach((clip, i) => {
+      // Handle video if present
+      if (clip.hasVideo) {
+        const videoFilter = `[${i}:v]trim=start=${clip.trimIn}:end=${clip.trimOut},setpts=PTS-STARTPTS[v${i}]`;
+        filters.push(videoFilter);
+      }
+      
+      // Handle audio if present
+      if (clip.hasAudio) {
+        const audioFilter = `[${i}:a]atrim=start=${clip.trimIn}:end=${clip.trimOut},asetpts=PTS-STARTPTS[a${i}]`;
+        filters.push(audioFilter);
+      }
+    });
+
+    // Create base video and audio tracks with black/silence
+    const baseVideoFilter = `[${colorInputIndex}:v]trim=duration=${totalDuration}[base_video]`;
+    const baseAudioFilter = `[${silenceInputIndex}:a]atrim=duration=${totalDuration}[base_audio]`;
+    
+    filters.push(baseVideoFilter);
+    filters.push(baseAudioFilter);
+
+    // Overlay clips onto base tracks
+    let currentVideoTrack = 'base_video';
+    let currentAudioTrack = 'base_audio';
+    let overlayIndex = 0;
+
+    preparedClips.forEach((clip, i) => {
+      const startTime = clip.startTime;
+      const duration = clip.duration;
+      
+      // Video overlay (only if clip has video)
+      if (clip.hasVideo) {
+        const videoOverlay = `[${currentVideoTrack}][v${i}]overlay=x=0:y=0:enable='between(t,${startTime},${startTime + duration})'[overlay_v${overlayIndex}]`;
+        filters.push(videoOverlay);
+        currentVideoTrack = `overlay_v${overlayIndex}`;
+      }
+      
+      // Audio mix (only if clip has audio)
+      if (clip.hasAudio) {
+        const audioMix = `[${currentAudioTrack}][a${i}]amix=inputs=2:duration=longest:weights=1 1[overlay_a${overlayIndex}]`;
+        filters.push(audioMix);
+        currentAudioTrack = `overlay_a${overlayIndex}`;
+      }
+      
+      overlayIndex++;
+    });
+
+    // Final output mapping
+    filters.push(`[${currentVideoTrack}]format=yuv420p[outv]`);
+    // Audio track is already properly formatted from the mixing chain
+
+    const filterComplex = filters.join('; ');
+
+    args.push('-filter_complex', filterComplex);
+    args.push('-map', '[outv]');
+    args.push('-map', `[${currentAudioTrack}]`);
+
+    // Add encoding options
+    args.push('-c:v', codec);
+    args.push('-preset', 'medium');
+    args.push('-crf', this.getQualityCRF(quality));
+    
+    if (typeof resolution === 'string' && resolution !== 'source') {
+      args.push('-s', resolution);
+    }
+    
+    args.push('-c:a', audioCodec || 'aac', '-b:a', '128k');
 
     if (container === 'mp4') {
       args.push('-movflags', '+faststart');

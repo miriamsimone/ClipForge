@@ -9,6 +9,7 @@ const Preview: React.FC = () => {
   const { isPlaying, tracks, pixelsPerSecond, playheadPosition } = useSelector((state: RootState) => state.timeline);
   const { clips: mediaClips } = useSelector((state: RootState) => state.media);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const pendingSeekRef = useRef<number | null>(null);
   const lastDispatchedPlayheadRef = useRef<number>(playheadPosition);
   const lastTimelineTimeRef = useRef<number>(0);
@@ -18,25 +19,59 @@ const Preview: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [currentClipIndex, setCurrentClipIndex] = useState(0);
 
   const timelineClips = useMemo(() => {
-    const allClips = tracks?.flatMap(track => track.clips || []) ?? [];
-    return allClips
+    // Get all clips from all tracks with their track information
+    const allClips = tracks?.flatMap(track => 
+      (track.clips || []).map(clip => ({
+        clip,
+        trackType: track.type as 'video' | 'audio' | 'overlay',
+        trackId: track.id
+      }))
+    ) ?? [];
+    
+    // Sort by start time, prioritizing video tracks
+    const sorted = allClips
       .slice()
       .sort((a, b) => {
-        const startA = typeof a.startTime === 'number' ? a.startTime : 0;
-        const startB = typeof b.startTime === 'number' ? b.startTime : 0;
+        const startA = typeof a.clip.startTime === 'number' ? a.clip.startTime : 0;
+        const startB = typeof b.clip.startTime === 'number' ? b.clip.startTime : 0;
         if (startA === startB) {
-          return a.id.localeCompare(b.id);
+          // Prioritize video tracks over audio tracks when start times match
+          const typePriority: Record<string, number> = { video: 1, overlay: 2, audio: 3 };
+          const priorityA = typePriority[a.trackType] || 999;
+          const priorityB = typePriority[b.trackType] || 999;
+          if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+          }
+          return a.clip.id.localeCompare(b.clip.id);
         }
         return startA - startB;
       });
-  }, [tracks]);
+    
+    // Debug: log all sorted clips
+    console.log('Timeline clips sorted:', sorted.map((entry, idx) => {
+      const mediaClip = mediaClips?.find(mc => mc.id === entry.clip.mediaClipId);
+      return {
+        index: idx,
+        clipId: entry.clip.id,
+        trackType: entry.trackType,
+        startTime: entry.clip.startTime,
+        duration: entry.clip.duration,
+        mediaClipFileName: mediaClip?.fileName,
+        hasVideo: mediaClip?.hasVideo,
+        hasAudio: mediaClip?.hasAudio
+      };
+    }));
+    
+    return sorted;
+  }, [tracks, mediaClips]);
 
   const clipOffsets = useMemo(() => {
     let runningOffset = 0;
-    return timelineClips.map(clip => {
+    return timelineClips.map(({ clip }) => {
       const clipDuration = clip.duration || 0;
       const explicitStart = typeof clip.startTime === 'number' ? clip.startTime : null;
       const offset = explicitStart !== null ? explicitStart : runningOffset;
@@ -46,17 +81,48 @@ const Preview: React.FC = () => {
   }, [timelineClips]);
 
   const timelineDuration = useMemo(() => {
-    return timelineClips.reduce((max, clip, index) => {
+    return timelineClips.reduce((max, { clip }, index) => {
       const clipDuration = clip.duration || 0;
       const start = clipOffsets[index] ?? 0;
       return Math.max(max, start + clipDuration);
     }, 0);
   }, [timelineClips, clipOffsets]);
 
+
+
+  const currentTimelineClipEntry = timelineClips[currentClipIndex] ?? null;
+  const currentTimelineClip = currentTimelineClipEntry?.clip ?? null;
+  const currentClipOffset = clipOffsets[currentClipIndex] ?? 0;
+
+  const currentMediaClip = useMemo(() => {
+    if (!currentTimelineClip || !mediaClips) {
+      return null;
+    }
+    return mediaClips.find(clip => clip.id === currentTimelineClip.mediaClipId) ?? null;
+  }, [currentTimelineClip, mediaClips]);
+
+  // Check if current clip is audio-only
+  // Use trackType from the entry instead of mediaClip.hasVideo to properly detect audio-only clips
+  const isAudioOnly = currentTimelineClipEntry 
+    ? currentTimelineClipEntry.trackType === 'audio'
+    : (currentMediaClip && !currentMediaClip.hasVideo && currentMediaClip.hasAudio);
+  
+  // Debug logging
+  console.log('Preview clip info:', {
+    clipIndex: currentClipIndex,
+    clipId: currentTimelineClip?.id,
+    trackType: currentTimelineClipEntry?.trackType,
+    mediaClipId: currentTimelineClip?.mediaClipId,
+    hasVideo: currentMediaClip?.hasVideo,
+    hasAudio: currentMediaClip?.hasAudio,
+    isAudioOnly,
+    mediaClipFileName: currentMediaClip?.fileName
+  });
+
   // Safe seeking function to prevent concurrent seeks
   const safeSeek = useCallback((targetTime: number, force = false) => {
-    const video = videoRef.current;
-    if (!video || video.readyState < 1) {
+    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!mediaElement || mediaElement.readyState < 1) {
       pendingSeekRef.current = targetTime;
       return;
     }
@@ -72,7 +138,7 @@ const Preview: React.FC = () => {
       return;
     }
 
-    const currentTime = video.currentTime;
+    const currentTime = mediaElement.currentTime;
     if (Math.abs(currentTime - targetTime) < 0.1) {
       return; // Already close enough
     }
@@ -81,7 +147,7 @@ const Preview: React.FC = () => {
     lastSeekTimeRef.current = now;
 
     try {
-      video.currentTime = targetTime;
+      mediaElement.currentTime = targetTime;
     } catch (error) {
       console.warn('Seek failed:', error);
     } finally {
@@ -90,7 +156,7 @@ const Preview: React.FC = () => {
         isSeekingRef.current = false;
       }, 50);
     }
-  }, []);
+  }, [isAudioOnly]);
 
   const advanceToClip = useCallback((nextIndex: number) => {
 
@@ -106,7 +172,8 @@ const Preview: React.FC = () => {
       return;
     }
 
-    const nextClip = timelineClips[nextIndex];
+    const nextClipEntry = timelineClips[nextIndex];
+    const nextClip = nextClipEntry?.clip;
     const nextOffset = clipOffsets[nextIndex] ?? 0;
     const trimIn = nextClip?.trimIn ?? 0;
     const playheadPx = nextOffset * pixelsPerSecond;
@@ -118,25 +185,20 @@ const Preview: React.FC = () => {
     dispatch(setPlayheadPosition(playheadPx));
     pendingSeekRef.current = trimIn;
 
-    if (videoRef.current) {
-      const video = videoRef.current;
-      const isSameSrc = video.dataset.timelineClipId === nextClip?.id;
+    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
+    if (mediaElement) {
+      const isSameSrc = mediaElement.dataset.timelineClipId === nextClip?.id;
 
-      if (video.readyState >= 1 && isSameSrc) {
+      if (mediaElement.readyState >= 1 && isSameSrc) {
         safeSeek(trimIn, true); // Force seek when advancing clips
       }
+      
+      // Resume playback if we're supposed to be playing
+      if (isPlaying) {
+        mediaElement.play().catch(console.error);
+      }
     }
-  }, [clipOffsets, timelineClips, timelineDuration, dispatch, pixelsPerSecond, safeSeek]);
-
-  const currentTimelineClip = timelineClips[currentClipIndex] ?? null;
-  const currentClipOffset = clipOffsets[currentClipIndex] ?? 0;
-
-  const currentMediaClip = useMemo(() => {
-    if (!currentTimelineClip || !mediaClips) {
-      return null;
-    }
-    return mediaClips.find(clip => clip.id === currentTimelineClip.mediaClipId) ?? null;
-  }, [currentTimelineClip, mediaClips]);
+  }, [clipOffsets, timelineClips, timelineDuration, dispatch, pixelsPerSecond, safeSeek, isPlaying, isAudioOnly]);
 
   const currentTrimIn = currentTimelineClip?.trimIn ?? 0;
   const originalMediaDuration = currentTimelineClip && currentMediaClip
@@ -145,24 +207,30 @@ const Preview: React.FC = () => {
   const trimOut = currentTimelineClip?.trimOut ?? originalMediaDuration;
   const currentTrimmedDuration = Math.max(0, trimOut - currentTrimIn);
 
-  // Video playback control
+  // Video/Audio playback control
   useEffect(() => {
-    if (videoRef.current) {
+    if (isAudioOnly && audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.play().catch(console.error);
+      } else {
+        audioRef.current.pause();
+      }
+    } else if (!isAudioOnly && videoRef.current) {
       if (isPlaying) {
         videoRef.current.play().catch(console.error);
       } else {
         videoRef.current.pause();
       }
     }
-  }, [isPlaying]);
+  }, [isPlaying, isAudioOnly]);
 
   const updateFromVideo = useCallback(() => {
-    const video = videoRef.current;
-    if (!video || isSeekingRef.current) {
+    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!mediaElement || isSeekingRef.current) {
       return; // Skip updates during seeking to prevent conflicts
     }
 
-    const sourceTime = video.currentTime;
+    const sourceTime = mediaElement.currentTime;
     const relativeTime = Math.max(0, sourceTime - currentTrimIn);
     const timelineTime = currentClipOffset + relativeTime;
     const playheadPx = timelineTime * pixelsPerSecond;
@@ -200,7 +268,6 @@ const Preview: React.FC = () => {
         return;
       }
 
-      const nextClip = timelineClips[nextIndex];
       const currentClipEndTime = currentClipOffset + currentTrimmedDuration;
       const nextClipStartTime = clipOffsets[nextIndex] ?? 0;
       const gapDuration = nextClipStartTime - currentClipEndTime;
@@ -213,7 +280,10 @@ const Preview: React.FC = () => {
           gapDuration
         });
 
-        video.pause();
+        const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
+        if (mediaElement) {
+          mediaElement.pause();
+        }
 
         // Calculate how long the gap should take at 1x speed (in milliseconds)
         const gapDurationMs = gapDuration * 1000;
@@ -243,6 +313,14 @@ const Preview: React.FC = () => {
           if (progress >= 1.0 || newTime >= nextClipStartTime - 0.01) {
             console.log('Gap animation complete, advancing to next clip');
             advanceToClip(nextIndex);
+            
+            // Resume playback after advancing to next clip
+            if (isPlaying) {
+              const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
+              if (mediaElement) {
+                mediaElement.play().catch(console.error);
+              }
+            }
           } else if (isPlaying) {
             requestAnimationFrame(animateGap);
           }
@@ -265,11 +343,15 @@ const Preview: React.FC = () => {
     clipOffsets,
     timelineDuration,
     isPlaying,
+    isAudioOnly,
   ]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) {
+    const audio = audioRef.current;
+    const mediaElement = isAudioOnly ? audio : video;
+    
+    if (!mediaElement) {
       return;
     }
 
@@ -281,7 +363,7 @@ const Preview: React.FC = () => {
       // Start a smooth animation loop for playhead updates
       const animate = () => {
         updateFromVideo();
-        if (isPlaying && !video.paused) {
+        if (isPlaying && !mediaElement.paused) {
           playheadAnimationRef.current = requestAnimationFrame(animate);
         }
       };
@@ -297,11 +379,11 @@ const Preview: React.FC = () => {
     };
 
     // Use timeupdate as a fallback for smooth updates
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('play', handlePlay);
-    video.addEventListener('pause', handlePause);
+    mediaElement.addEventListener('timeupdate', handleTimeUpdate);
+    mediaElement.addEventListener('play', handlePlay);
+    mediaElement.addEventListener('pause', handlePause);
 
-    if (isPlaying && !video.paused) {
+    if (isPlaying && !mediaElement.paused) {
       handlePlay();
     }
 
@@ -310,11 +392,11 @@ const Preview: React.FC = () => {
         cancelAnimationFrame(playheadAnimationRef.current);
         playheadAnimationRef.current = null;
       }
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('play', handlePlay);
-      video.removeEventListener('pause', handlePause);
+      mediaElement.removeEventListener('timeupdate', handleTimeUpdate);
+      mediaElement.removeEventListener('play', handlePlay);
+      mediaElement.removeEventListener('pause', handlePause);
     };
-  }, [isPlaying, updateFromVideo]);
+  }, [isPlaying, updateFromVideo, isAudioOnly]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -412,7 +494,7 @@ const Preview: React.FC = () => {
     }
   }, [timelineClips, currentClipIndex, dispatch]);
 
-  // Get video URL when media clip changes
+  // Get media URL when media clip changes
   useEffect(() => {
     let isCancelled = false;
 
@@ -420,28 +502,46 @@ const Preview: React.FC = () => {
       const trimIn = currentTimelineClip.trimIn ?? 0;
       pendingSeekRef.current = trimIn;
 
-      window.electronAPI.getVideoUrl(currentMediaClip.filePath)
-        .then((url: string) => {
-          if (!isCancelled) {
-            setVideoUrl(prevUrl => {
-              return url;
-            });
-          }
-        })
-        .catch((error: unknown) => {
-          if (!isCancelled) {
-            console.error('Error getting video URL:', error);
-            setVideoUrl(null);
-          }
-        });
+      if (isAudioOnly) {
+        // Load audio URL for audio-only tracks
+        window.electronAPI.getVideoUrl(currentMediaClip.filePath)
+          .then((url: string) => {
+            if (!isCancelled) {
+              setAudioUrl(url);
+              setVideoUrl(null);
+            }
+          })
+          .catch((error: unknown) => {
+            if (!isCancelled) {
+              console.error('Error getting audio URL:', error);
+              setAudioUrl(null);
+            }
+          });
+      } else {
+        // Load video URL for video tracks
+        window.electronAPI.getVideoUrl(currentMediaClip.filePath)
+          .then((url: string) => {
+            if (!isCancelled) {
+              setVideoUrl(url);
+              setAudioUrl(null);
+            }
+          })
+          .catch((error: unknown) => {
+            if (!isCancelled) {
+              console.error('Error getting video URL:', error);
+              setVideoUrl(null);
+            }
+          });
+      }
     } else {
       setVideoUrl(null);
+      setAudioUrl(null);
     }
 
     return () => {
       isCancelled = true;
     };
-  }, [currentTimelineClip, currentMediaClip]);
+  }, [currentTimelineClip, currentMediaClip, isAudioOnly]);
 
   useEffect(() => {
     if (!timelineClips.length || pixelsPerSecond <= 0) {
@@ -454,7 +554,7 @@ const Preview: React.FC = () => {
       return;
     }
 
-    const clipIndex = timelineClips.findIndex((clip, index) => {
+    const clipIndex = timelineClips.findIndex(({ clip }, index) => {
       const clipOffset = clipOffsets[index] ?? 0;
       const clipDuration = clip.duration || 0;
       return targetTime >= clipOffset && targetTime <= clipOffset + clipDuration;
@@ -470,7 +570,9 @@ const Preview: React.FC = () => {
     }
 
     const clipOffset = clipOffsets[clipIndex] ?? 0;
-    const clip = timelineClips[clipIndex];
+    const clipEntry = timelineClips[clipIndex];
+    const clip = clipEntry?.clip;
+    if (!clip) return;
     const trimIn = clip.trimIn ?? 0;
     const relativeTimelineTime = Math.max(0, targetTime - clipOffset);
     const limitedTimelineTime = clip.duration
@@ -550,54 +652,75 @@ const Preview: React.FC = () => {
         </div>
         
         <div className="preview-video">
-          {currentMediaClip && videoUrl ? (
+          {currentMediaClip && (videoUrl || audioUrl) ? (
             <div className="preview-video-container">
-              <video
-                key={currentTimelineClip?.id ?? 'preview-video'}
-                ref={videoRef}
-                src={videoUrl}
-                data-timeline-clip-id={currentTimelineClip?.id ?? ''}
-                style={{ 
-                  width: '100%', 
-                  height: '100%', 
-                  objectFit: 'contain',
-                  maxWidth: '100%',
-                  maxHeight: '100%'
-                }}
-                preload="auto"
-                playsInline
-                disablePictureInPicture
-                onLoadedMetadata={() => {
-                  if (videoRef.current) {
-                    setTotalDuration(videoRef.current.duration);
-                  }
-                }}
-                onError={(e) => {
-                  console.error('Video load error:', e);
-                  console.error('Video src:', videoUrl);
-                }}
-                controls={false}
-              />
+              {isAudioOnly ? (
+                <audio
+                  key={currentTimelineClip?.id ?? 'preview-audio'}
+                  ref={audioRef}
+                  src={audioUrl || undefined}
+                  data-timeline-clip-id={currentTimelineClip?.id ?? ''}
+                  preload="auto"
+                  onLoadedMetadata={() => {
+                    if (audioRef.current) {
+                      setTotalDuration(audioRef.current.duration);
+                    }
+                  }}
+                  onError={(e) => {
+                    console.error('Audio load error:', e);
+                    console.error('Audio src:', audioUrl);
+                  }}
+                  controls={false}
+                  style={{ display: 'none' }}
+                />
+              ) : (
+                <video
+                  key={currentTimelineClip?.id ?? 'preview-video'}
+                  ref={videoRef}
+                  src={videoUrl || undefined}
+                  data-timeline-clip-id={currentTimelineClip?.id ?? ''}
+                  style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    objectFit: 'contain',
+                    maxWidth: '100%',
+                    maxHeight: '100%'
+                  }}
+                  preload="auto"
+                  playsInline
+                  disablePictureInPicture
+                  onLoadedMetadata={() => {
+                    if (videoRef.current) {
+                      setTotalDuration(videoRef.current.duration);
+                    }
+                  }}
+                  onError={(e) => {
+                    console.error('Video load error:', e);
+                    console.error('Video src:', videoUrl);
+                  }}
+                  controls={false}
+                />
+              )}
               {isPlaying && (
                 <div className="preview-playing-overlay">
-                  ▶️ Playing...
+                  {isAudioOnly ? '🎵 Playing...' : '▶️ Playing...'}
                 </div>
               )}
             </div>
-          ) : currentMediaClip && !videoUrl ? (
+          ) : currentMediaClip && !videoUrl && !audioUrl ? (
             <div className="preview-placeholder">
               <div className="preview-icon">⏳</div>
-              <p>Loading video...</p>
-              <p className="text-gray-400">Preparing video for playback</p>
+              <p>Loading {isAudioOnly ? 'audio' : 'video'}...</p>
+              <p className="text-gray-400">Preparing {isAudioOnly ? 'audio' : 'video'} for playback</p>
             </div>
           ) : (
             <div className="preview-placeholder">
               <div className="preview-icon">🎬</div>
-              <p>No video selected</p>
-              <p className="text-gray-400">Drag a video to the timeline</p>
+              <p>No media selected</p>
+              <p className="text-gray-400">Drag a video or audio to the timeline</p>
               {isPlaying && (
                 <div style={{ marginTop: '10px', color: '#007AFF', fontSize: '14px' }}>
-                  ▶️ Playing...
+                  {isAudioOnly ? '🎵 Playing...' : '▶️ Playing...'}
                 </div>
               )}
             </div>

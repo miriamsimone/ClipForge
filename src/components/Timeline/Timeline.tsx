@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { addClip, setPixelsPerSecond, setPlayheadPosition, setPlaying, setZoom, splitClip, duplicateClip, removeClip } from '../../store/slices/timelineSlice';
+import { addMediaClip } from '../../store/slices/mediaSlice';
 import { MediaClip } from '../../types/media';
 import { TimelineClip } from '../../types/timeline';
 import { MIN_PIXELS_PER_SECOND, PIXELS_PER_SECOND, TIMELINE_PADDING } from '../../constants/timeline';
@@ -232,20 +233,75 @@ const Timeline: React.FC = () => {
 
         console.log('After snapping:', snappedTime);
 
-        // Create timeline clip from media clip
-        const timelineClip: TimelineClip = {
-          id: `timeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          mediaClipId: mediaClip.id,
-          track: trackId,
-          startTime: snappedTime,
-          duration: mediaClip.duration,
-          trimIn: 0,
-          trimOut: mediaClip.duration,
-          isSelected: false,
-        };
+        // Check if we're dropping a video file on an audio track
+        const isAudioTrack = targetTrack?.type === 'audio';
+        const isVideoWithAudio = mediaClip.hasVideo && mediaClip.hasAudio;
 
-        // Add to timeline
-        dispatch(addClip({ trackId, clip: timelineClip }));
+        // If dropping video on audio track, extract audio first
+        if (isAudioTrack && isVideoWithAudio) {
+          console.log('Extracting audio from video for audio track...');
+          
+          // Show loading state
+          window.electronAPI.extractAudioFromVideo(mediaClip.filePath, null, 'aac')
+            .then((audioMetadata: any) => {
+              console.log('Audio extracted successfully:', audioMetadata);
+              
+              // Create a new media clip entry for the extracted audio
+              const audioMediaClip: MediaClip = {
+                id: `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                filePath: audioMetadata.filePath,
+                fileName: audioMetadata.fileName || `${mediaClip.fileName}_audio.aac`,
+                fileSize: audioMetadata.fileSize || 0,
+                duration: audioMetadata.duration || mediaClip.duration,
+                width: 0,
+                height: 0,
+                frameRate: 0,
+                codec: 'unknown',
+                audioCodec: audioMetadata.audioCodec || 'aac',
+                hasAudio: true,
+                hasVideo: false,
+                format: 'aac',
+                createdAt: Date.now()
+              };
+
+              // Create timeline clip from extracted audio
+              const timelineClip: TimelineClip = {
+                id: `timeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                mediaClipId: audioMediaClip.id,
+                track: trackId,
+                startTime: snappedTime,
+                duration: audioMetadata.duration || mediaClip.duration,
+                trimIn: 0,
+                trimOut: audioMetadata.duration || mediaClip.duration,
+                isSelected: false,
+              };
+
+              // Add the audio media clip to the store
+              dispatch(addMediaClip(audioMediaClip));
+              
+              // Add to timeline
+              dispatch(addClip({ trackId, clip: timelineClip }));
+            })
+            .catch((error: Error) => {
+              console.error('Failed to extract audio from video:', error);
+              alert(`Failed to extract audio: ${error.message}`);
+            });
+        } else {
+          // Regular behavior: just add the media clip to the timeline
+          const timelineClip: TimelineClip = {
+            id: `timeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            mediaClipId: mediaClip.id,
+            track: trackId,
+            startTime: snappedTime,
+            duration: mediaClip.duration,
+            trimIn: 0,
+            trimOut: mediaClip.duration,
+            isSelected: false,
+          };
+
+          // Add to timeline
+          dispatch(addClip({ trackId, clip: timelineClip }));
+        }
       }
     } catch (error) {
       console.error('Error handling drop:', error);

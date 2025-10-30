@@ -29,6 +29,7 @@ export const importMediaFiles = createAsyncThunk(
           codec: metadata.codec,
           audioCodec: metadata.audioCodec,
           hasAudio: metadata.hasAudio,
+          hasVideo: metadata.hasVideo,
           format: metadata.format,
           createdAt: Date.now(),
         };

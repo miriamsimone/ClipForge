@@ -56,6 +56,32 @@
   line-height: 1.4;
 }
 
+.export-warnings {
+  background-color: rgba(251, 191, 36, 0.2);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  color: #fbbf24;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.export-warnings h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+.export-warnings ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.export-warnings li {
+  margin: 4px 0;
+}
+
 .option-group {
   display: flex;
   flex-direction: column;

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFileDialog: () => ipcRenderer.invoke('media:open-file-dialog'),
   getMetadata: (filePath) => ipcRenderer.invoke('media:get-metadata', filePath),
   generateThumbnail: (filePath, timestamp) => ipcRenderer.invoke('media:generate-thumbnail', filePath, timestamp),
+  extractAudioFromVideo: (videoPath, outputPath, audioFormat) => ipcRenderer.invoke('media:extract-audio-from-video', videoPath, outputPath, audioFormat),
   getVideoUrl: (filePath) => ipcRenderer.invoke('media:get-video-url', filePath),
   
   // FFmpeg operations
@@ -21,6 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Recording operations
   getScreenSources: () => ipcRenderer.invoke('recording:get-sources'),
+  startScreenRecording: (options) => ipcRenderer.invoke('recording:start-screen', options),
+  stopScreenRecording: () => ipcRenderer.invoke('recording:stop-screen'),
+  getRecordingStatus: () => ipcRenderer.invoke('recording:get-status'),
   saveRecording: (buffer, fileName) => ipcRenderer.invoke('recording:save-file', buffer, fileName),
   
   // Export operations

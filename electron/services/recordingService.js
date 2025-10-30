@@ -71,30 +71,38 @@ class RecordingService {
         `ClipForge_Recording_${timestamp}.mp4`
       );
 
-      // Build FFmpeg command for screen recording
+      // For macOS, we'll use FFmpeg with avfoundation
+      // But first, we need to use screen capture API differently
+      // The issue is that Electron source IDs don't map directly to FFmpeg device indices
+      // So we'll use a simpler approach: list available screens and use the first one
+      // Or better: use Electron's built-in screen capture with getUserMedia approach
+      // For now, let's use FFmpeg with a default screen capture (will capture primary display)
+      
       const ffmpegPath = this.getFFmpegPath();
       const args = [
-        '-f', 'avfoundation', // macOS screen capture
+        '-f', 'avfoundation',
+        '-framerate', frameRate.toString(),
         '-capture_cursor', '1',
         '-capture_mouse_clicks', '1',
-        '-i', `${sourceId}:0`, // Screen source ID with device index
+        '-i', '1:none', // Screen 1, no audio device initially
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', quality === 'high' ? '18' : quality === 'medium' ? '23' : '28',
         '-r', frameRate.toString(),
         '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-y' // Overwrite output file
+        '-movflags', '+faststart'
       ];
 
-      // Add audio if requested
+      // Add audio if requested - use system audio
       if (audio) {
-        args.push('-c:a', 'aac', '-b:a', '128k');
+        // Try to capture system audio using BlackHole or similar, or skip audio
+        // For now, we'll skip audio in FFmpeg and handle it separately if needed
+        args.push('-an'); // No audio for now - Electron stream approach handles audio better
       } else {
         args.push('-an');
       }
 
-      args.push(this.outputPath);
+      args.push('-y', this.outputPath);
 
       console.log('FFmpeg command:', ffmpegPath, args.join(' '));
 
@@ -159,20 +167,43 @@ class RecordingService {
       
       if (this.ffmpegProcess) {
         console.log('Killing FFmpeg process...');
+        // Store reference to process for timeout callback
+        const processRef = this.ffmpegProcess;
+        let processExited = false;
+        let timeoutId = null;
+        
         // Send SIGINT to gracefully stop FFmpeg
-        this.ffmpegProcess.kill('SIGINT');
+        processRef.kill('SIGINT');
         
         // Wait for the process to finish
         await new Promise((resolve) => {
-          this.ffmpegProcess.on('exit', (code) => {
-            console.log('FFmpeg process stopped with code:', code);
-            resolve();
-          });
+          // Set up exit handler
+          const exitHandler = (code) => {
+            if (!processExited) {
+              console.log('FFmpeg process stopped with code:', code);
+              processExited = true;
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+              }
+              resolve();
+            }
+          };
+          
+          processRef.once('exit', exitHandler);
+          
           // Timeout after 5 seconds
-          setTimeout(() => {
-            console.log('FFmpeg stop timeout, forcing kill');
-            this.ffmpegProcess.kill('SIGKILL');
-            resolve();
+          timeoutId = setTimeout(() => {
+            if (!processExited) {
+              console.log('FFmpeg stop timeout, forcing kill');
+              try {
+                if (processRef && !processRef.killed) {
+                  processRef.kill('SIGKILL');
+                }
+              } catch (error) {
+                console.error('Error forcing kill on FFmpeg process:', error);
+              }
+              exitHandler(null); // Resolve even if kill failed
+            }
           }, 5000);
         });
       }

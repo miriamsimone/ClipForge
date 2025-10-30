@@ -307,6 +307,88 @@ class FFmpegService {
     }
   }
 
+  /**
+   * Extract audio track from a video file
+   * @param {string} videoPath - Path to input video file
+   * @param {string} outputPath - Path where audio file should be saved
+   * @param {string} audioFormat - Output format: 'mp3', 'aac', 'wav', 'm4a' (default: 'aac')
+   * @returns {Promise<string>} Path to extracted audio file
+   */
+  async extractAudio(videoPath, outputPath = null, audioFormat = 'aac') {
+    // Generate output path if not provided
+    if (!outputPath) {
+      const inputDir = path.dirname(videoPath);
+      const inputBase = path.basename(videoPath, path.extname(videoPath));
+      outputPath = path.join(inputDir, `${inputBase}_audio.${audioFormat}`);
+    }
+
+    const args = [
+      '-i', videoPath,
+      '-vn', // No video
+      '-acodec', this.getAudioCodec(audioFormat),
+      ...this.getAudioCodecOptions(audioFormat),
+      '-y', // Overwrite output
+      outputPath
+    ];
+
+    try {
+      console.log('Extracting audio from video:', videoPath);
+      console.log('FFmpeg args:', args);
+      await this.executeCommand(args);
+      console.log('Audio extracted successfully to:', outputPath);
+      return outputPath;
+    } catch (error) {
+      console.error('Audio extraction failed:', error);
+      throw new Error(`Failed to extract audio: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get the appropriate audio codec for the given format
+   */
+  getAudioCodec(format) {
+    const codecMap = {
+      'mp3': 'libmp3lame',
+      'aac': 'aac',
+      'wav': 'pcm_s16le',
+      'm4a': 'aac',
+      'flac': 'flac',
+      'ogg': 'libvorbis'
+    };
+    return codecMap[format.toLowerCase()] || 'aac';
+  }
+
+  /**
+   * Get codec-specific options
+   */
+  getAudioCodecOptions(format) {
+    const options = [];
+    switch (format.toLowerCase()) {
+      case 'mp3':
+        options.push('-b:a', '192k'); // Bitrate
+        options.push('-ar', '44100'); // Sample rate
+        break;
+      case 'aac':
+      case 'm4a':
+        options.push('-b:a', '192k');
+        options.push('-ar', '44100');
+        break;
+      case 'wav':
+        // WAV uses PCM, just set sample rate
+        options.push('-ar', '44100');
+        break;
+      case 'flac':
+        // FLAC is lossless, no bitrate needed
+        options.push('-compression_level', '5');
+        break;
+      case 'ogg':
+        options.push('-b:a', '192k');
+        options.push('-ar', '44100');
+        break;
+    }
+    return options;
+  }
+
 
   cancelProcess(processId) {
     const process = this.activeProcesses.get(processId);

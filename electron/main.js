@@ -224,6 +224,15 @@ ipcMain.handle('media:generate-thumbnail', async (event, filePath, timestamp) =>
   return await mediaService.generateThumbnail(filePath, timestamp);
 });
 
+ipcMain.handle('media:extract-audio-from-video', async (event, videoPath, outputPath, audioFormat) => {
+  try {
+    return await mediaService.extractAudioFromVideo(videoPath, outputPath, audioFormat);
+  } catch (error) {
+    console.error('Error extracting audio:', error);
+    throw error;
+  }
+});
+
 ipcMain.handle('media:get-video-url', async (event, filePath) => {
   // Use custom video protocol to serve the file
   return `video://${filePath}`;
@@ -233,9 +242,31 @@ ipcMain.handle('ffmpeg:execute', async (event, args, options) => {
   return await ffmpegService.executeCommand(args, options);
 });
 
-// Screen recording legacy APIs for fallback support
+// Screen recording APIs
 ipcMain.handle('recording:get-sources', async () => {
   return await recordingService.getScreenSources();
+});
+
+ipcMain.handle('recording:start-screen', async (event, options) => {
+  try {
+    return await recordingService.startScreenRecording(options);
+  } catch (error) {
+    console.error('Error in recording:start-screen handler:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('recording:stop-screen', async () => {
+  try {
+    return await recordingService.stopScreenRecording();
+  } catch (error) {
+    console.error('Error in recording:stop-screen handler:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('recording:get-status', async () => {
+  return recordingService.getRecordingStatus();
 });
 
 ipcMain.handle('recording:save-file', async (event, buffer, fileName) => {

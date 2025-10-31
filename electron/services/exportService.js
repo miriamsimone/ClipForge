@@ -65,6 +65,7 @@ class ExportService {
             startTime: Number(clip.startTime ?? 0),
             hasAudio: Boolean(clip.hasAudio),
             hasVideo: Boolean(clip.hasVideo ?? true), // Default to true for backward compatibility
+            subtitles: clip.subtitles, // Preserve subtitles from timeline clip
           };
         })
         .filter(Boolean)
@@ -87,7 +88,17 @@ class ExportService {
         ...options,
         timelineData
       };
-      const ffmpegArgs = this.buildFFmpegCommand(preparedClips, resolvedOutputPath, exportOptions);
+      
+      // Prepare subtitle files if needed
+      let tempSubtitleFiles = [];
+      try {
+        tempSubtitleFiles = await this.prepareSubtitles(preparedClips);
+      } catch (error) {
+        console.warn('Failed to prepare subtitles:', error);
+        // Continue with export even if subtitle preparation fails
+      }
+      
+      const ffmpegArgs = this.buildFFmpegCommand(preparedClips, resolvedOutputPath, exportOptions, tempSubtitleFiles);
 
       console.log('FFmpeg command:', ffmpegArgs.join(' '));
 
@@ -99,7 +110,7 @@ class ExportService {
         processId: exportPromise.processId,
         outputPath: resolvedOutputPath,
         startTime: Date.now(),
-        tempFiles: []
+        tempFiles: tempSubtitleFiles
       };
 
       exportPromise
@@ -140,7 +151,7 @@ class ExportService {
     }
   }
 
-  buildFFmpegCommand(preparedClips, outputPath, options) {
+  buildFFmpegCommand(preparedClips, outputPath, options, tempSubtitleFiles = []) {
     const {
       resolution = '1920x1080',
       framerate = 30,
@@ -153,16 +164,147 @@ class ExportService {
 
     const args = ['-y']; // Overwrite output file
 
-    // If we have timeline data with gaps, use the new multi-track approach
-    if (timelineData && timelineData.gaps && timelineData.gaps.length > 0) {
-      return this.buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData);
+    // Use multi-track approach if:
+    // 1. We have gaps (need to fill with black/silence)
+    // 2. We have multiple concurrent tracks (need composition/overlaying)
+    // 3. We have overlapping clips (need proper layering)
+    const hasGaps = timelineData && timelineData.gaps && timelineData.gaps.length > 0;
+    const hasMultipleTracks = timelineData && timelineData.maxConcurrentTracks && timelineData.maxConcurrentTracks > 1;
+    const hasOverlapping = timelineData && timelineData.hasOverlappingClips;
+    
+    if (hasGaps || hasMultipleTracks || hasOverlapping) {
+      return this.buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData, tempSubtitleFiles);
     }
 
-    // Original single-track approach for backward compatibility
-    return this.buildSingleTrackFFmpegCommand(preparedClips, outputPath, options);
+    // Original single-track approach for backward compatibility (simple sequential clips)
+    return this.buildSingleTrackFFmpegCommand(preparedClips, outputPath, options, tempSubtitleFiles);
   }
 
-  buildSingleTrackFFmpegCommand(preparedClips, outputPath, options) {
+  /**
+   * Prepare subtitle files for export
+   * Creates temporary SRT files with time-adjusted subtitles for each clip
+   */
+  async prepareSubtitles(preparedClips) {
+    const tempFiles = [];
+    const clipsWithSubtitles = preparedClips.filter(clip => clip.subtitles && clip.subtitles.srtContent);
+    
+    if (clipsWithSubtitles.length === 0) {
+      return [];
+    }
+
+    // Create a combined SRT file for all subtitles
+    const combinedSrtPath = path.join(os.tmpdir(), `subtitles_combined_${Date.now()}.srt`);
+    let combinedSrtContent = '';
+
+    for (const clip of clipsWithSubtitles) {
+      const adjustedSrt = this.adjustSRTTimestamps(
+        clip.subtitles.srtContent,
+        clip.trimIn,
+        clip.startTime
+      );
+      
+      // Append adjusted subtitles to combined file
+      combinedSrtContent += adjustedSrt;
+    }
+
+    fs.writeFileSync(combinedSrtPath, combinedSrtContent);
+    tempFiles.push(combinedSrtPath);
+
+    return tempFiles;
+  }
+
+  /**
+   * Adjust SRT timestamps for clip trimming and timeline position
+   * @param {string} srtContent - Original SRT content
+   * @param {number} trimIn - Start time of trim in seconds
+   * @param {number} timelineStart - Timeline start position in seconds
+   * @returns {string} Adjusted SRT content
+   */
+  adjustSRTTimestamps(srtContent, trimIn, timelineStart) {
+    const lines = srtContent.split('\n');
+    const adjustedLines = [];
+    let currentIndex = 1;
+    let i = 0;
+    
+    while (i < lines.length) {
+      // Skip empty lines at start
+      while (i < lines.length && !lines[i].trim()) {
+        i++;
+      }
+      if (i >= lines.length) break;
+      
+      // Parse subtitle block: index, timestamp, text lines, empty line
+      const indexLine = lines[i++].trim();
+      
+      // Check if this is actually an index (number)
+      if (isNaN(parseInt(indexLine))) {
+        // Not a valid subtitle block, skip
+        continue;
+      }
+      
+      if (i >= lines.length) break;
+      
+      // Get timestamp line
+      const timestampLine = lines[i++].trim();
+      const timestampMatch = timestampLine.match(/^(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})$/);
+      
+      if (!timestampMatch) {
+        // Invalid timestamp, skip this block
+        while (i < lines.length && lines[i].trim()) {
+          i++; // Skip text lines
+        }
+        continue;
+      }
+      
+      // Parse timestamps
+      const startSeconds = this.parseSRTTime(timestampMatch[1], timestampMatch[2], timestampMatch[3], timestampMatch[4]);
+      const endSeconds = this.parseSRTTime(timestampMatch[5], timestampMatch[6], timestampMatch[7], timestampMatch[8]);
+      
+      // Adjust for trim (subtract trimIn)
+      const adjustedStart = Math.max(0, startSeconds - trimIn);
+      const adjustedEnd = Math.max(0, endSeconds - trimIn);
+      
+      // Collect text lines
+      const textLines = [];
+      while (i < lines.length && lines[i].trim()) {
+        textLines.push(lines[i]);
+        i++;
+      }
+      
+      // If subtitle is completely before trim point or has no text, skip it
+      if (adjustedEnd <= 0 || textLines.length === 0) {
+        continue;
+      }
+      
+      // Add timeline start offset
+      const finalStart = adjustedStart + timelineStart;
+      const finalEnd = adjustedEnd + timelineStart;
+      
+      // Write adjusted subtitle block
+      adjustedLines.push(currentIndex.toString());
+      adjustedLines.push(this.formatSRTTime(finalStart) + ' --> ' + this.formatSRTTime(finalEnd));
+      adjustedLines.push(...textLines);
+      adjustedLines.push(''); // Empty line between blocks
+      currentIndex++;
+    }
+    
+    return adjustedLines.join('\n') + (adjustedLines.length > 0 ? '\n' : '');
+  }
+
+  parseSRTTime(hours, minutes, seconds, milliseconds) {
+    return parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds) + parseInt(milliseconds) / 1000;
+  }
+
+  formatSRTTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const milliseconds = Math.floor((seconds % 1) * 1000);
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${milliseconds.toString().padStart(3, '0')}`;
+  }
+
+  buildSingleTrackFFmpegCommand(preparedClips, outputPath, options, tempSubtitleFiles = []) {
     const {
       resolution = '1920x1080',
       framerate = 30,
@@ -191,10 +333,22 @@ class ExportService {
     const concatInputs = preparedClips.map((_, i) => `[v${i}][a${i}]`).join('');
     const concatFilter = `${concatInputs}concat=n=${preparedClips.length}:v=1:a=1[outv][outa]`;
 
-    const filterComplex = `${videoFilters}; ${audioFilters}; ${concatFilter}`;
+    // Add subtitle filter if we have subtitles
+    let finalVideoFilter = '[outv]';
+    if (tempSubtitleFiles.length > 0 && tempSubtitleFiles[0]) {
+      const subtitlePath = tempSubtitleFiles[0];
+      // FFmpeg subtitles filter - path needs to be in single quotes
+      // Escape single quotes in the path itself
+      let escapedPath = subtitlePath.replace(/\\/g, '/');
+      escapedPath = escapedPath.replace(/'/g, "'\\''"); // Escape single quotes: ' -> '\''
+      // Wrap in single quotes for FFmpeg filter
+      finalVideoFilter = `[outv]subtitles='${escapedPath}'[subtitled]`;
+    }
+
+    const filterComplex = `${videoFilters}; ${audioFilters}; ${concatFilter}${finalVideoFilter !== '[outv]' ? '; ' + finalVideoFilter : ''}`;
 
     args.push('-filter_complex', filterComplex);
-    args.push('-map', '[outv]');
+    args.push('-map', finalVideoFilter.includes('subtitled') ? '[subtitled]' : '[outv]');
     args.push('-map', '[outa]');
 
     // Add encoding options if not using source settings
@@ -222,7 +376,7 @@ class ExportService {
     return args;
   }
 
-  buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData) {
+  buildMultiTrackFFmpegCommand(preparedClips, outputPath, options, timelineData, tempSubtitleFiles = []) {
     const {
       resolution = '1920x1080',
       framerate = 30,
@@ -303,8 +457,19 @@ class ExportService {
       overlayIndex++;
     });
 
-    // Final output mapping
-    filters.push(`[${currentVideoTrack}]format=yuv420p[outv]`);
+    // Final output mapping with subtitle overlay if needed
+    let finalVideoFilter = `[${currentVideoTrack}]format=yuv420p`;
+    if (tempSubtitleFiles.length > 0 && tempSubtitleFiles[0]) {
+      const subtitlePath = tempSubtitleFiles[0];
+      // FFmpeg subtitles filter - path needs to be in single quotes
+      let escapedPath = subtitlePath.replace(/\\/g, '/');
+      escapedPath = escapedPath.replace(/'/g, "'\\''"); // Escape single quotes: ' -> '\''
+      // Wrap in single quotes for FFmpeg filter
+      finalVideoFilter += `[formatted]; [formatted]subtitles='${escapedPath}'[outv]`;
+    } else {
+      finalVideoFilter += `[outv]`;
+    }
+    filters.push(finalVideoFilter);
     // Audio track is already properly formatted from the mixing chain
 
     const filterComplex = filters.join('; ');

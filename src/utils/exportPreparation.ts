@@ -13,6 +13,11 @@ export interface PreparedExportData {
     startTime: number;
     trackId: number;
     hasAudio: boolean;
+    hasVideo?: boolean;
+    subtitles?: {
+      srtContent: string;
+      generatedAt: number;
+    };
   }>;
   timelineData: {
     totalDuration: number;
@@ -63,7 +68,7 @@ export function prepareTimelineForExport(timeline: TimelineState, mediaClips: Me
     const boundedTrimOut = Math.max(baseTrimIn, Math.min(rawTrimOut, mediaClip.duration ?? rawTrimOut));
     const trimmedDuration = Math.max(0, boundedTrimOut - baseTrimIn);
 
-    return {
+    const exportClip = {
       id: clip.id,
       filePath: mediaClip.filePath,
       trimIn: baseTrimIn,
@@ -73,7 +78,10 @@ export function prepareTimelineForExport(timeline: TimelineState, mediaClips: Me
       trackId: trackId,
       hasAudio: Boolean(mediaClip.hasAudio),
       hasVideo: Boolean(mediaClip.hasVideo),
+      subtitles: mediaClip.subtitles,
     };
+    
+    return exportClip;
   }).filter(clip => clip.duration > 0.01); // Filter out clips with zero duration
 
   return {
@@ -151,10 +159,6 @@ export function validateTimelineForExport(timeline: TimelineState, mediaClips: M
   
   if (analysis.gaps.length > 0) {
     warnings.push(`Timeline contains ${analysis.gaps.length} gaps - these will be filled with black frames/silence`);
-  }
-  
-  if (analysis.maxConcurrentTracks > 1) {
-    warnings.push(`Timeline uses ${analysis.maxConcurrentTracks} concurrent tracks - complex composition will be applied`);
   }
   
   return {

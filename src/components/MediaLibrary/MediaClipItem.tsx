@@ -1,4 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { AppDispatch } from '../../store';
+import { generateSubtitles } from '../../store/slices/mediaSlice';
 import { MediaClip } from '../../types/media';
 import './MediaClipItem.css';
 
@@ -9,6 +12,10 @@ interface MediaClipItemProps {
 }
 
 const MediaClipItem: React.FC<MediaClipItemProps> = ({ clip, isSelected, onSelect }) => {
+  const dispatch = useDispatch<AppDispatch>();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -26,6 +33,29 @@ const MediaClipItem: React.FC<MediaClipItemProps> = ({ clip, isSelected, onSelec
       mediaClip: clip
     }));
     e.dataTransfer.effectAllowed = 'copy';
+  };
+
+  const handleGenerateSubtitles = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent clip selection when clicking button
+    
+    if (!clip.hasAudio) {
+      setError('Video has no audio track');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+
+    try {
+      await dispatch(generateSubtitles({
+        clipId: clip.id,
+        filePath: clip.filePath
+      })).unwrap();
+    } catch (err) {
+      setError((err as Error).message || 'Failed to generate subtitles');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -60,6 +90,27 @@ const MediaClipItem: React.FC<MediaClipItemProps> = ({ clip, isSelected, onSelec
           {clip.codec ? clip.codec.toUpperCase() : 'Unknown'}
           {clip.hasAudio && ' + Audio'}
         </div>
+        {clip.hasAudio && (
+          <div className="media-clip-subtitle-section">
+            {clip.subtitles ? (
+              <div className="media-clip-subtitle-status">
+                <span className="subtitle-badge">✓ Subtitles</span>
+              </div>
+            ) : (
+              <button
+                className="btn-subtitle-generate"
+                onClick={handleGenerateSubtitles}
+                disabled={isGenerating}
+                title="Generate subtitles using AI"
+              >
+                {isGenerating ? 'Generating...' : 'Generate Subtitles'}
+              </button>
+            )}
+            {error && (
+              <div className="subtitle-error">{error}</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

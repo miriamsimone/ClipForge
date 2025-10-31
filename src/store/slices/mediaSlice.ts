@@ -56,9 +56,23 @@ export const importMediaFiles = createAsyncThunk(
 
 export const generateThumbnail = createAsyncThunk(
   'media/generateThumbnail',
-  async ({ clipId, timestamp }: { clipId: string; timestamp: string }) => {
+  async (_: { clipId: string; timestamp: string }): Promise<never> => {
     // This would need to be implemented with proper clip lookup
     throw new Error('Not implemented');
+  }
+);
+
+export const generateSubtitles = createAsyncThunk(
+  'media/generateSubtitles',
+  async ({ clipId, filePath }: { clipId: string; filePath: string }) => {
+    const result = await window.electronAPI.generateSubtitles(filePath);
+    return {
+      clipId,
+      subtitles: {
+        srtContent: result.srtContent,
+        generatedAt: result.generatedAt
+      }
+    };
   }
 );
 
@@ -115,13 +129,26 @@ const mediaSlice = createSlice({
       .addCase(generateThumbnail.pending, (state) => {
         state.isLoading = true;
       })
-      .addCase(generateThumbnail.fulfilled, (state, action) => {
-        state.isLoading = false;
-        // Handle thumbnail generation success
-      })
       .addCase(generateThumbnail.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.error.message || 'Failed to generate thumbnail';
+      })
+      .addCase(generateSubtitles.pending, (state, action) => {
+        // Set loading state for the specific clip
+        const clip = state.clips.find(c => c.id === action.meta.arg.clipId);
+        if (clip) {
+          // Mark clip as generating subtitles (we'll use a custom property for UI state)
+        }
+      })
+      .addCase(generateSubtitles.fulfilled, (state, action) => {
+        const { clipId, subtitles } = action.payload;
+        const clip = state.clips.find(c => c.id === clipId);
+        if (clip) {
+          clip.subtitles = subtitles;
+        }
+      })
+      .addCase(generateSubtitles.rejected, (state, action) => {
+        state.error = action.error.message || 'Failed to generate subtitles';
       });
   },
 });

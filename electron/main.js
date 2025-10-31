@@ -1,5 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, systemPreferences } = require('electron');
+// Load environment variables from .env file (must be first)
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+const { app, BrowserWindow, ipcMain, dialog, protocol, systemPreferences } = require('electron');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 
@@ -28,6 +31,7 @@ const MediaService = require('./services/mediaService');
 const FFmpegService = require('./services/ffmpegService');
 const RecordingService = require('./services/recordingService');
 const ExportService = require('./services/exportService');
+const SubtitleService = require('./services/subtitleService');
 
 let mainWindow;
 
@@ -203,6 +207,7 @@ const mediaService = new MediaService();
 const ffmpegService = new FFmpegService();
 const recordingService = new RecordingService();
 const exportService = new ExportService();
+const subtitleService = new SubtitleService();
 
 // IPC handlers
 ipcMain.handle('media:open-file-dialog', async () => {
@@ -307,4 +312,19 @@ ipcMain.handle('export:get-progress', async () => {
 
 ipcMain.handle('export:cancel', async () => {
   return await exportService.cancelExport();
+});
+
+// Subtitle generation API
+ipcMain.handle('subtitle:generate', async (event, filePath) => {
+  try {
+    const srtContent = await subtitleService.generateSubtitles(filePath);
+    return {
+      success: true,
+      srtContent,
+      generatedAt: Date.now()
+    };
+  } catch (error) {
+    console.error('Error generating subtitles:', error);
+    throw error;
+  }
 });

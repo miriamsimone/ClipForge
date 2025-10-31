@@ -7,6 +7,10 @@ export interface ExportTimelineClip {
   trimOut: number;
   trackId: number;
   hasAudio: boolean;
+  subtitles?: {
+    srtContent: string;
+    generatedAt: number;
+  };
 }
 
 export interface ExportOptions {

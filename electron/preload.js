@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getExportProgress: () => ipcRenderer.invoke('export:get-progress'),
   cancelExport: () => ipcRenderer.invoke('export:cancel'),
   
+  // Subtitle operations
+  generateSubtitles: (filePath) => ipcRenderer.invoke('subtitle:generate', filePath),
+  
   // Event listeners
   onExportProgress: (callback) => {
     ipcRenderer.on('export:progress', callback);

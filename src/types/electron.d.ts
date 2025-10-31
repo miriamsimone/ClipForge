@@ -22,6 +22,9 @@ export interface ElectronAPI {
   getExportProgress: () => Promise<any>;
   cancelExport: () => Promise<any>;
   
+  // Subtitle operations
+  generateSubtitles: (filePath: string) => Promise<{ success: boolean; srtContent: string; generatedAt: number }>;
+  
   // Event listeners
   onExportProgress: (callback: (event: any, data: any) => void) => void;
   onExportComplete: (callback: (event: any, data: any) => void) => void;

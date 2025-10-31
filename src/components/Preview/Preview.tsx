@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../store';
 import { setPlaying, setPlayheadPosition } from '../../store/slices/timelineSlice';
+import { getActiveClipsAtTime, calculateClipPlaybackTime, getPrimaryVideoClip, hasActiveClips, ActiveClipsAtTime } from '../../utils/previewUtils';
+import { parseSRT, adjustSubtitleCues, getActiveSubtitle } from '../../utils/subtitleUtils';
 import './Preview.css';
 
 const Preview: React.FC = () => {
@@ -9,121 +11,81 @@ const Preview: React.FC = () => {
   const { isPlaying, tracks, pixelsPerSecond, playheadPosition } = useSelector((state: RootState) => state.timeline);
   const { clips: mediaClips } = useSelector((state: RootState) => state.media);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const pendingSeekRef = useRef<number | null>(null);
+  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const overlayVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const pendingSeekRef = useRef<Map<string, number>>(new Map());
   const lastDispatchedPlayheadRef = useRef<number>(playheadPosition);
   const lastTimelineTimeRef = useRef<number>(0);
   const playheadAnimationRef = useRef<number | null>(null);
   const isSeekingRef = useRef<boolean>(false);
   const lastSeekTimeRef = useRef<number>(0);
+  const isPlayingSmoothlyRef = useRef<boolean>(false); // Track if video is playing smoothly
+  const playbackInitializedRef = useRef<boolean>(false); // Track if playback has been initialized
   const [currentTime, setCurrentTime] = useState(0);
+  const [smoothPlayheadTime, setSmoothPlayheadTime] = useState(0); // Smooth interpolated time for playhead rendering
+  const smoothPlayheadTargetRef = useRef<number>(0); // Target time for smooth interpolation
+  const smoothPlayheadCurrentRef = useRef<number>(0); // Current smooth position for animation
+  const smoothPlayheadAnimationRef = useRef<number | null>(null);
   const [totalDuration, setTotalDuration] = useState(0);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [currentClipIndex, setCurrentClipIndex] = useState(0);
+  const [activeClips, setActiveClips] = useState<ActiveClipsAtTime>({ video: [], audio: [], overlay: [] });
+  const [mediaUrls, setMediaUrls] = useState<Map<string, string>>(new Map());
+  const loadingUrlsRef = useRef<Set<string>>(new Set()); // Track URLs currently being loaded
+  const [activeSubtitleText, setActiveSubtitleText] = useState<string | null>(null);
 
-  const timelineClips = useMemo(() => {
-    // Get all clips from all tracks with their track information
-    const allClips = tracks?.flatMap(track => 
-      (track.clips || []).map(clip => ({
-        clip,
-        trackType: track.type as 'video' | 'audio' | 'overlay',
-        trackId: track.id
-      }))
-    ) ?? [];
-    
-    // Sort by start time, prioritizing video tracks
-    const sorted = allClips
-      .slice()
-      .sort((a, b) => {
-        const startA = typeof a.clip.startTime === 'number' ? a.clip.startTime : 0;
-        const startB = typeof b.clip.startTime === 'number' ? b.clip.startTime : 0;
-        if (startA === startB) {
-          // Prioritize video tracks over audio tracks when start times match
-          const typePriority: Record<string, number> = { video: 1, overlay: 2, audio: 3 };
-          const priorityA = typePriority[a.trackType] || 999;
-          const priorityB = typePriority[b.trackType] || 999;
-          if (priorityA !== priorityB) {
-            return priorityA - priorityB;
-          }
-          return a.clip.id.localeCompare(b.clip.id);
-        }
-        return startA - startB;
-      });
-    
-    // Debug: log all sorted clips
-    console.log('Timeline clips sorted:', sorted.map((entry, idx) => {
-      const mediaClip = mediaClips?.find(mc => mc.id === entry.clip.mediaClipId);
-      return {
-        index: idx,
-        clipId: entry.clip.id,
-        trackType: entry.trackType,
-        startTime: entry.clip.startTime,
-        duration: entry.clip.duration,
-        mediaClipFileName: mediaClip?.fileName,
-        hasVideo: mediaClip?.hasVideo,
-        hasAudio: mediaClip?.hasAudio
-      };
-    }));
-    
-    return sorted;
-  }, [tracks, mediaClips]);
-
-  const clipOffsets = useMemo(() => {
-    let runningOffset = 0;
-    return timelineClips.map(({ clip }) => {
-      const clipDuration = clip.duration || 0;
-      const explicitStart = typeof clip.startTime === 'number' ? clip.startTime : null;
-      const offset = explicitStart !== null ? explicitStart : runningOffset;
-      runningOffset = Math.max(runningOffset, offset + clipDuration);
-      return offset;
-    });
-  }, [timelineClips]);
-
+  // Calculate timeline duration from all tracks
   const timelineDuration = useMemo(() => {
-    return timelineClips.reduce((max, { clip }, index) => {
-      const clipDuration = clip.duration || 0;
-      const start = clipOffsets[index] ?? 0;
-      return Math.max(max, start + clipDuration);
-    }, 0);
-  }, [timelineClips, clipOffsets]);
+    let maxDuration = 0;
+    tracks.forEach(track => {
+      track.clips.forEach(clip => {
+        const clipEnd = (clip.startTime || 0) + (clip.duration || 0);
+        maxDuration = Math.max(maxDuration, clipEnd);
+      });
+    });
+    return maxDuration;
+  }, [tracks]);
 
+  // Update active clips when time changes
+  useEffect(() => {
+    const timelineState = { tracks, pixelsPerSecond, playheadPosition: 0, zoom: 1, scrollPosition: 0, isPlaying: false, selectedClipIds: [], snapToGrid: true, snapToClips: true };
+    const active = getActiveClipsAtTime(timelineState, mediaClips || [], currentTime);
+    setActiveClips(active);
+  }, [tracks, mediaClips, currentTime, pixelsPerSecond]);
 
+  // Get primary video clip for display
+  const primaryVideoClip = useMemo(() => {
+    return getPrimaryVideoClip(activeClips);
+  }, [activeClips]);
 
-  const currentTimelineClipEntry = timelineClips[currentClipIndex] ?? null;
-  const currentTimelineClip = currentTimelineClipEntry?.clip ?? null;
-  const currentClipOffset = clipOffsets[currentClipIndex] ?? 0;
-
-  const currentMediaClip = useMemo(() => {
-    if (!currentTimelineClip || !mediaClips) {
-      return null;
+  // Parse and adjust subtitles for the primary video clip
+  const subtitleCues = useMemo(() => {
+    if (!primaryVideoClip || !primaryVideoClip.mediaClip.subtitles?.srtContent) {
+      return [];
     }
-    return mediaClips.find(clip => clip.id === currentTimelineClip.mediaClipId) ?? null;
-  }, [currentTimelineClip, mediaClips]);
 
-  // Check if current clip is audio-only
-  // Use trackType from the entry instead of mediaClip.hasVideo to properly detect audio-only clips
-  const isAudioOnly = currentTimelineClipEntry 
-    ? currentTimelineClipEntry.trackType === 'audio'
-    : (currentMediaClip && !currentMediaClip.hasVideo && currentMediaClip.hasAudio);
-  
-  // Debug logging
-  console.log('Preview clip info:', {
-    clipIndex: currentClipIndex,
-    clipId: currentTimelineClip?.id,
-    trackType: currentTimelineClipEntry?.trackType,
-    mediaClipId: currentTimelineClip?.mediaClipId,
-    hasVideo: currentMediaClip?.hasVideo,
-    hasAudio: currentMediaClip?.hasAudio,
-    isAudioOnly,
-    mediaClipFileName: currentMediaClip?.fileName
-  });
+    const parsedCues = parseSRT(primaryVideoClip.mediaClip.subtitles.srtContent);
+    const trimIn = primaryVideoClip.clip.trimIn || 0;
+    const timelineStart = primaryVideoClip.clip.startTime || 0;
+    return adjustSubtitleCues(parsedCues, trimIn, timelineStart);
+  }, [primaryVideoClip]);
 
-  // Safe seeking function to prevent concurrent seeks
-  const safeSeek = useCallback((targetTime: number, force = false) => {
-    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
-    if (!mediaElement || mediaElement.readyState < 1) {
-      pendingSeekRef.current = targetTime;
+  // Update active subtitle text based on current time
+  useEffect(() => {
+    if (subtitleCues.length === 0) {
+      setActiveSubtitleText(null);
+      return;
+    }
+
+    const subtitle = getActiveSubtitle(subtitleCues, currentTime);
+    setActiveSubtitleText(subtitle);
+  }, [currentTime, subtitleCues]);
+
+  const hasVideoTrack = activeClips.video.length > 0 || activeClips.overlay.length > 0;
+  const hasAudioTrack = activeClips.audio.length > 0;
+
+  // Safe seeking function for a specific media element
+  const safeSeek = useCallback((element: HTMLMediaElement | null, clipId: string, targetTime: number, force = false) => {
+    if (!element || element.readyState < 1) {
+      pendingSeekRef.current.set(clipId, targetTime);
       return;
     }
 
@@ -138,7 +100,7 @@ const Preview: React.FC = () => {
       return;
     }
 
-    const currentTime = mediaElement.currentTime;
+    const currentTime = element.currentTime;
     if (Math.abs(currentTime - targetTime) < 0.1) {
       return; // Already close enough
     }
@@ -147,7 +109,7 @@ const Preview: React.FC = () => {
     lastSeekTimeRef.current = now;
 
     try {
-      mediaElement.currentTime = targetTime;
+      element.currentTime = targetTime;
     } catch (error) {
       console.warn('Seek failed:', error);
     } finally {
@@ -156,218 +118,332 @@ const Preview: React.FC = () => {
         isSeekingRef.current = false;
       }, 50);
     }
-  }, [isAudioOnly]);
+  }, []);
 
-  const advanceToClip = useCallback((nextIndex: number) => {
+  // Initialize smooth playhead
+  useEffect(() => {
+    smoothPlayheadCurrentRef.current = currentTime;
+    smoothPlayheadTargetRef.current = currentTime;
+    setSmoothPlayheadTime(currentTime);
+  }, []); // Only on mount
 
-    if (nextIndex >= timelineClips.length) {
-      const finalTime = timelineDuration;
-      const finalPx = finalTime * pixelsPerSecond;
-      setCurrentClipIndex(Math.max(0, timelineClips.length - 1));
-      setCurrentTime(finalTime);
-      lastTimelineTimeRef.current = finalTime;
+  // Smooth playhead animation loop
+  useEffect(() => {
+    if (!isPlaying || !isPlayingSmoothlyRef.current) {
+      // Stop animation when not playing
+      if (smoothPlayheadAnimationRef.current !== null) {
+        cancelAnimationFrame(smoothPlayheadAnimationRef.current);
+        smoothPlayheadAnimationRef.current = null;
+      }
+      // Sync smooth playhead to current time when paused
+      smoothPlayheadCurrentRef.current = currentTime;
+      setSmoothPlayheadTime(currentTime);
+      smoothPlayheadTargetRef.current = currentTime;
+      return;
+    }
+
+    // Start smooth animation loop
+    const animate = () => {
+      // Smoothly interpolate towards target
+      const current = smoothPlayheadCurrentRef.current;
+      const target = smoothPlayheadTargetRef.current;
+      const diff = target - current;
+      
+      if (Math.abs(diff) > 0.001) {
+        // Smooth interpolation (easing) - adjust factor for smoothness
+        const step = diff * 0.5; // 0.5 = balanced speed, higher = faster catch-up
+        const newTime = current + step;
+        smoothPlayheadCurrentRef.current = newTime;
+        setSmoothPlayheadTime(newTime);
+        smoothPlayheadAnimationRef.current = requestAnimationFrame(animate);
+      } else {
+        // Close enough, snap to target and keep animating
+        smoothPlayheadCurrentRef.current = target;
+        setSmoothPlayheadTime(target);
+        smoothPlayheadAnimationRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    smoothPlayheadAnimationRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (smoothPlayheadAnimationRef.current !== null) {
+        cancelAnimationFrame(smoothPlayheadAnimationRef.current);
+        smoothPlayheadAnimationRef.current = null;
+      }
+    };
+  }, [isPlaying, currentTime]);
+
+  // Update timeline position based on primary video element (or timeline time if no video)
+  const updateFromTimeline = useCallback(() => {
+    if (isSeekingRef.current) {
+      return;
+    }
+
+    // Use primary video element as time source, or use timeline time directly
+    let sourceTime: number | null = null;
+    if (primaryVideoClip && videoRef.current && videoRef.current.readyState >= 1) {
+      const videoTime = videoRef.current.currentTime;
+      const clipStart = primaryVideoClip.clip.startTime || 0;
+      const trimIn = primaryVideoClip.clip.trimIn || 0;
+      // Convert video element time back to timeline time
+      sourceTime = clipStart + (videoTime - trimIn);
+    }
+
+    // Fallback to currentTime if no video element
+    if (sourceTime === null) {
+      sourceTime = currentTime;
+    }
+
+    // Check if we've reached the end of the timeline
+    if (sourceTime >= timelineDuration) {
+      const finalPx = timelineDuration * pixelsPerSecond;
+      setCurrentTime(timelineDuration);
+      smoothPlayheadTargetRef.current = timelineDuration;
+      setSmoothPlayheadTime(timelineDuration);
+      lastTimelineTimeRef.current = timelineDuration;
       lastDispatchedPlayheadRef.current = finalPx;
       dispatch(setPlayheadPosition(finalPx));
       dispatch(setPlaying(false));
+      isPlayingSmoothlyRef.current = false;
+      playbackInitializedRef.current = false;
       return;
     }
 
-    const nextClipEntry = timelineClips[nextIndex];
-    const nextClip = nextClipEntry?.clip;
-    const nextOffset = clipOffsets[nextIndex] ?? 0;
-    const trimIn = nextClip?.trimIn ?? 0;
-    const playheadPx = nextOffset * pixelsPerSecond;
+    // Update smooth playhead target frequently for smooth animation
+    smoothPlayheadTargetRef.current = sourceTime;
 
-    setCurrentClipIndex(nextIndex);
-    setCurrentTime(nextOffset);
-    lastTimelineTimeRef.current = nextOffset;
-    lastDispatchedPlayheadRef.current = playheadPx;
-    dispatch(setPlayheadPosition(playheadPx));
-    pendingSeekRef.current = trimIn;
-
-    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
-    if (mediaElement) {
-      const isSameSrc = mediaElement.dataset.timelineClipId === nextClip?.id;
-
-      if (mediaElement.readyState >= 1 && isSameSrc) {
-        safeSeek(trimIn, true); // Force seek when advancing clips
-      }
+    // Only update currentTime state if significantly changed (prevents unnecessary re-renders)
+    const timeDelta = Math.abs(sourceTime - lastTimelineTimeRef.current);
+    if (timeDelta > 0.05) {
+      lastTimelineTimeRef.current = sourceTime;
+      setCurrentTime(sourceTime);
       
-      // Resume playback if we're supposed to be playing
-      if (isPlaying) {
-        mediaElement.play().catch(console.error);
+      // Update Redux playhead position less frequently
+      const playheadPx = sourceTime * pixelsPerSecond;
+      const playheadDelta = Math.abs(playheadPx - lastDispatchedPlayheadRef.current);
+      
+      // Only dispatch if playhead moved significantly (reduces Redux updates)
+      if (playheadDelta > 2.0) {
+        lastDispatchedPlayheadRef.current = playheadPx;
+        dispatch(setPlayheadPosition(playheadPx));
       }
     }
-  }, [clipOffsets, timelineClips, timelineDuration, dispatch, pixelsPerSecond, safeSeek, isPlaying, isAudioOnly]);
+  }, [primaryVideoClip, currentTime, pixelsPerSecond, dispatch, timelineDuration]);
 
-  const currentTrimIn = currentTimelineClip?.trimIn ?? 0;
-  const originalMediaDuration = currentTimelineClip && currentMediaClip
-    ? currentMediaClip.duration
-    : currentTimelineClip?.duration ?? 0;
-  const trimOut = currentTimelineClip?.trimOut ?? originalMediaDuration;
-  const currentTrimmedDuration = Math.max(0, trimOut - currentTrimIn);
-
-  // Video/Audio playback control
+  // Multi-track playback control
   useEffect(() => {
-    if (isAudioOnly && audioRef.current) {
+    // Control video element
+    if (hasVideoTrack && videoRef.current) {
+      const videoUrl = primaryVideoClip ? mediaUrls.get(primaryVideoClip.clip.id) : null;
+      
       if (isPlaying) {
-        audioRef.current.play().catch(console.error);
+        // If we don't have URL yet, wait for it to load
+        if (!videoUrl) {
+          playbackInitializedRef.current = false;
+          return;
+        }
+
+        // Ensure video source is set
+        if (videoRef.current.src !== videoUrl) {
+          videoRef.current.src = videoUrl;
+          playbackInitializedRef.current = false;
+        }
+
+        // Only seek if playback hasn't been initialized yet or if explicitly scrubbing
+        // Don't seek on every currentTime change - let video play smoothly
+        if (!playbackInitializedRef.current && primaryVideoClip) {
+          const playbackTime = calculateClipPlaybackTime(
+            primaryVideoClip.clip,
+            currentTime,
+            primaryVideoClip.mediaClip
+          );
+          
+          // Wait for video to be ready
+          if (videoRef.current.readyState >= 1) {
+            videoRef.current.currentTime = playbackTime;
+            videoRef.current.play().then(() => {
+              playbackInitializedRef.current = true;
+              isPlayingSmoothlyRef.current = true;
+            }).catch(error => {
+              console.error('Video play error:', error);
+              playbackInitializedRef.current = false;
+            });
+          } else {
+            // Wait for metadata to load
+            const handleCanPlay = () => {
+              if (videoRef.current && primaryVideoClip) {
+                const playbackTime = calculateClipPlaybackTime(
+                  primaryVideoClip.clip,
+                  currentTime,
+                  primaryVideoClip.mediaClip
+                );
+                videoRef.current.currentTime = playbackTime;
+                videoRef.current.play().then(() => {
+                  playbackInitializedRef.current = true;
+                  isPlayingSmoothlyRef.current = true;
+                }).catch(console.error);
+              }
+              videoRef.current?.removeEventListener('canplay', handleCanPlay);
+            };
+            videoRef.current.addEventListener('canplay', handleCanPlay);
+            if (!videoRef.current.src) {
+              videoRef.current.src = videoUrl;
+            }
+            videoRef.current.load(); // Trigger load if not already loading
+          }
+        } else if (!videoRef.current.paused && playbackInitializedRef.current) {
+          // Video is already playing smoothly - just ensure it's playing
+          if (videoRef.current.paused) {
+            videoRef.current.play().catch(console.error);
+          }
+        }
       } else {
-        audioRef.current.pause();
-      }
-    } else if (!isAudioOnly && videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.play().catch(console.error);
-      } else {
-        videoRef.current.pause();
+        if (videoRef.current && !videoRef.current.paused) {
+          videoRef.current.pause();
+        }
+        playbackInitializedRef.current = false;
+        isPlayingSmoothlyRef.current = false;
       }
     }
-  }, [isPlaying, isAudioOnly]);
 
-  const updateFromVideo = useCallback(() => {
-    const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
-    if (!mediaElement || isSeekingRef.current) {
-      return; // Skip updates during seeking to prevent conflicts
+    // Control all audio elements
+    activeClips.audio.forEach(({ clip, mediaClip }) => {
+      const audioElement = audioRefs.current.get(clip.id);
+      if (audioElement) {
+        if (isPlaying) {
+          // Ensure audio is at correct time before playing
+          const playbackTime = calculateClipPlaybackTime(clip, currentTime, mediaClip);
+          if (audioElement.readyState >= 1) {
+            audioElement.currentTime = playbackTime;
+          }
+          audioElement.play().catch(error => {
+            console.error(`Audio play error for clip ${clip.id}:`, error);
+          });
+        } else {
+          audioElement.pause();
+        }
+      }
+    });
+
+    // Control overlay video elements
+    activeClips.overlay.forEach(({ clip, mediaClip }) => {
+      const overlayElement = overlayVideoRefs.current.get(clip.id);
+      if (overlayElement) {
+        if (isPlaying) {
+          // Ensure overlay is at correct time before playing
+          const playbackTime = calculateClipPlaybackTime(clip, currentTime, mediaClip);
+          if (overlayElement.readyState >= 1) {
+            overlayElement.currentTime = playbackTime;
+          }
+          overlayElement.play().catch(error => {
+            console.error(`Overlay play error for clip ${clip.id}:`, error);
+          });
+        } else {
+          overlayElement.pause();
+        }
+      }
+    });
+  }, [isPlaying, hasVideoTrack, activeClips, primaryVideoClip, currentTime]);
+
+
+  // Handle time updates from primary video element and sync audio/overlay elements
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
     }
 
-    const sourceTime = mediaElement.currentTime;
-    const relativeTime = Math.max(0, sourceTime - currentTrimIn);
-    const timelineTime = currentClipOffset + relativeTime;
-    const playheadPx = timelineTime * pixelsPerSecond;
+    // Throttle sync operations to avoid excessive seeking
+    let lastSyncTime = 0;
+    const SYNC_INTERVAL = 500; // Sync every 500ms max (reduced frequency)
 
-    // Update local state for preview timeline (smooth)
-    if (Math.abs(timelineTime - lastTimelineTimeRef.current) > 0.001) {
-      lastTimelineTimeRef.current = timelineTime;
-      setCurrentTime(prev => (Math.abs(prev - timelineTime) > 0.001 ? timelineTime : prev));
-    }
-
-    // Only update Redux if playhead moved significantly (throttle updates)
-    // Use a small threshold to reduce dispatches while keeping it smooth
-    const playheadDelta = Math.abs(playheadPx - lastDispatchedPlayheadRef.current);
-    if (playheadDelta > 1.0) { // Only dispatch if moved more than 1 pixel
-      lastDispatchedPlayheadRef.current = playheadPx;
-      // Dispatch synchronously - requestAnimationFrame in updateFromVideo is already async
-      dispatch(setPlayheadPosition(playheadPx));
-    }
-
-    // Check if we've reached the end of the current clip
-    if (currentTrimmedDuration > 0 && relativeTime >= currentTrimmedDuration - 0.002) {
-      // Check if there's a next clip
-      const nextIndex = currentClipIndex + 1;
-
-      if (nextIndex >= timelineClips.length) {
-        // No more clips, stop playback
-        const finalTime = timelineDuration;
-        const finalPx = finalTime * pixelsPerSecond;
-        setCurrentClipIndex(Math.max(0, timelineClips.length - 1));
-        setCurrentTime(finalTime);
-        lastTimelineTimeRef.current = finalTime;
-        lastDispatchedPlayheadRef.current = finalPx;
-        dispatch(setPlayheadPosition(finalPx));
-        dispatch(setPlaying(false));
+    const syncAllMediaElements = () => {
+      if (!primaryVideoClip || !video || video.readyState < 1 || video.paused) {
         return;
       }
 
-      const currentClipEndTime = currentClipOffset + currentTrimmedDuration;
-      const nextClipStartTime = clipOffsets[nextIndex] ?? 0;
-      const gapDuration = nextClipStartTime - currentClipEndTime;
-
-      // If there's a gap, pause video but keep playback active to animate through gap
-      if (gapDuration > 0.05) {
-        console.log('Gap detected:', {
-          currentClipEndTime,
-          nextClipStartTime,
-          gapDuration
-        });
-
-        const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
-        if (mediaElement) {
-          mediaElement.pause();
-        }
-
-        // Calculate how long the gap should take at 1x speed (in milliseconds)
-        const gapDurationMs = gapDuration * 1000;
-        const startTime = performance.now();
-        const startTimelineTime = currentClipEndTime;
-
-        // Continue animating playhead through the gap
-        const animateGap = () => {
-          const elapsed = performance.now() - startTime;
-          const progress = Math.min(elapsed / gapDurationMs, 1.0);
-          const newTime = startTimelineTime + (gapDuration * progress);
-          const newPx = newTime * pixelsPerSecond;
-
-          setCurrentTime(newTime);
-          lastTimelineTimeRef.current = newTime;
-          lastDispatchedPlayheadRef.current = newPx;
-          dispatch(setPlayheadPosition(newPx));
-
-          console.log('Animating gap:', {
-            elapsed,
-            progress,
-            newTime,
-            nextClipStartTime
-          });
-
-          // If we've reached the next clip, start playing it
-          if (progress >= 1.0 || newTime >= nextClipStartTime - 0.01) {
-            console.log('Gap animation complete, advancing to next clip');
-            advanceToClip(nextIndex);
-            
-            // Resume playback after advancing to next clip
-            if (isPlaying) {
-              const mediaElement = isAudioOnly ? audioRef.current : videoRef.current;
-              if (mediaElement) {
-                mediaElement.play().catch(console.error);
-              }
-            }
-          } else if (isPlaying) {
-            requestAnimationFrame(animateGap);
-          }
-        };
-        requestAnimationFrame(animateGap);
-      } else {
-        // No gap, immediately advance to next clip
-        advanceToClip(nextIndex);
+      const now = Date.now();
+      if (now - lastSyncTime < SYNC_INTERVAL) {
+        return; // Skip this sync to avoid excessive seeking
       }
-    }
-  }, [
-    currentTrimIn,
-    currentClipOffset,
-    pixelsPerSecond,
-    dispatch,
-    currentTrimmedDuration,
-    advanceToClip,
-    currentClipIndex,
-    timelineClips,
-    clipOffsets,
-    timelineDuration,
-    isPlaying,
-    isAudioOnly,
-  ]);
+      lastSyncTime = now;
 
-  useEffect(() => {
-    const video = videoRef.current;
-    const audio = audioRef.current;
-    const mediaElement = isAudioOnly ? audio : video;
-    
-    if (!mediaElement) {
-      return;
-    }
+      const videoTime = video.currentTime;
+      const clipStart = primaryVideoClip.clip.startTime || 0;
+      const trimIn = primaryVideoClip.clip.trimIn || 0;
+      const timelineTime = clipStart + (videoTime - trimIn);
+
+      // Sync audio elements - only if significantly out of sync
+      activeClips.audio.forEach(({ clip, mediaClip }) => {
+        const audioElement = audioRefs.current.get(clip.id);
+        if (audioElement && audioElement.readyState >= 1 && !audioElement.paused) {
+          const clipStart = clip.startTime || 0;
+          const clipEnd = clipStart + (clip.duration || 0);
+          
+          // Only sync if timeline time is within this clip's range
+          if (timelineTime >= clipStart && timelineTime < clipEnd) {
+            const playbackTime = calculateClipPlaybackTime(clip, timelineTime, mediaClip);
+            const currentAudioTime = audioElement.currentTime;
+            
+            // Only sync if significantly out of sync (more than 0.5s difference to reduce seeks)
+            if (Math.abs(currentAudioTime - playbackTime) > 0.5) {
+              audioElement.currentTime = playbackTime;
+            }
+          }
+        }
+      });
+
+      // Sync overlay video elements - only if significantly out of sync
+      activeClips.overlay.forEach(({ clip, mediaClip }) => {
+        const overlayElement = overlayVideoRefs.current.get(clip.id);
+        if (overlayElement && overlayElement.readyState >= 1 && !overlayElement.paused) {
+          const clipStart = clip.startTime || 0;
+          const clipEnd = clipStart + (clip.duration || 0);
+          
+          // Only sync if timeline time is within this clip's range
+          if (timelineTime >= clipStart && timelineTime < clipEnd) {
+            const playbackTime = calculateClipPlaybackTime(clip, timelineTime, mediaClip);
+            const currentOverlayTime = overlayElement.currentTime;
+            
+            // Only sync if significantly out of sync (more than 0.5s difference to reduce seeks)
+            if (Math.abs(currentOverlayTime - playbackTime) > 0.5) {
+              overlayElement.currentTime = playbackTime;
+            }
+          }
+        }
+      });
+    };
+
+    // Update timeline frequently during playback for smooth playhead
+    let lastUpdateTime = 0;
+    let syncCounter = 0;
+    const UPDATE_INTERVAL = 16; // ~60fps updates for smooth playhead
+    const SYNC_CHECK_INTERVAL = 5; // Check sync less frequently
 
     const handleTimeUpdate = () => {
-      updateFromVideo();
+      // Only update if video is playing smoothly
+      if (isPlaying && isPlayingSmoothlyRef.current && !video.paused) {
+        const now = Date.now();
+        // Update timeline frequently for smooth playhead interpolation
+        if (now - lastUpdateTime >= UPDATE_INTERVAL) {
+          updateFromTimeline();
+          lastUpdateTime = now;
+        }
+        // Sync much less frequently during smooth playback
+        syncCounter++;
+        if (syncCounter >= SYNC_CHECK_INTERVAL) {
+          syncCounter = 0;
+          syncAllMediaElements();
+        }
+      } else if (!isPlaying || video.paused) {
+        // Update immediately when paused
+        updateFromTimeline();
+      }
     };
 
     const handlePlay = () => {
-      // Start a smooth animation loop for playhead updates
-      const animate = () => {
-        updateFromVideo();
-        if (isPlaying && !mediaElement.paused) {
-          playheadAnimationRef.current = requestAnimationFrame(animate);
-        }
-      };
-      animate();
+      updateFromTimeline();
     };
 
     const handlePause = () => {
@@ -375,50 +451,48 @@ const Preview: React.FC = () => {
         cancelAnimationFrame(playheadAnimationRef.current);
         playheadAnimationRef.current = null;
       }
-      updateFromVideo();
+      updateFromTimeline();
     };
 
-    // Use timeupdate as a fallback for smooth updates
-    mediaElement.addEventListener('timeupdate', handleTimeUpdate);
-    mediaElement.addEventListener('play', handlePlay);
-    mediaElement.addEventListener('pause', handlePause);
-
-    if (isPlaying && !mediaElement.paused) {
-      handlePlay();
-    }
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('play', handlePlay);
+    video.addEventListener('pause', handlePause);
 
     return () => {
       if (playheadAnimationRef.current !== null) {
         cancelAnimationFrame(playheadAnimationRef.current);
         playheadAnimationRef.current = null;
       }
-      mediaElement.removeEventListener('timeupdate', handleTimeUpdate);
-      mediaElement.removeEventListener('play', handlePlay);
-      mediaElement.removeEventListener('pause', handlePause);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('pause', handlePause);
     };
-  }, [isPlaying, updateFromVideo, isAudioOnly]);
+  }, [isPlaying, updateFromTimeline, hasVideoTrack, primaryVideoClip, activeClips]);
 
+  // Handle video metadata and seeking events
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) {
+    if (!video || !primaryVideoClip) {
       return;
     }
 
     const handleLoadedMetadata = () => {
-      updateFromVideo();
-      if (pendingSeekRef.current !== null) {
-        const seekTime = pendingSeekRef.current;
-        pendingSeekRef.current = null;
-        safeSeek(seekTime, true); // Force seek after metadata loads
+      updateFromTimeline();
+      const clipId = primaryVideoClip.clip.id;
+      const pendingSeek = pendingSeekRef.current.get(clipId);
+      if (pendingSeek !== undefined) {
+        pendingSeekRef.current.delete(clipId);
+        const playbackTime = calculateClipPlaybackTime(
+          primaryVideoClip.clip,
+          currentTime,
+          primaryVideoClip.mediaClip
+        );
+        safeSeek(video, clipId, playbackTime, true);
       }
       if (isPlaying) {
         video.play().catch(console.error);
-        updateFromVideo();
+        updateFromTimeline();
       }
-    };
-
-    const handleEnded = () => {
-      advanceToClip(currentClipIndex + 1);
     };
 
     const handleSeeking = () => {
@@ -430,17 +504,15 @@ const Preview: React.FC = () => {
     };
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
-    video.addEventListener('ended', handleEnded);
     video.addEventListener('seeking', handleSeeking);
     video.addEventListener('seeked', handleSeeked);
 
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      video.removeEventListener('ended', handleEnded);
       video.removeEventListener('seeking', handleSeeking);
       video.removeEventListener('seeked', handleSeeked);
     };
-  }, [updateFromVideo, advanceToClip, currentClipIndex, isPlaying, safeSeek]);
+  }, [updateFromTimeline, primaryVideoClip, currentTime, isPlaying, safeSeek]);
 
   // Keep total duration in sync with the timeline layout
   useEffect(() => {
@@ -451,155 +523,207 @@ const Preview: React.FC = () => {
     setTotalDuration(timelineDuration);
   }, [timelineDuration]);
 
-  // If playback restarts while at the end, jump back to the first clip
+  // Reset to beginning if playback restarts at end
   useEffect(() => {
     if (
       isPlaying &&
-      timelineClips.length > 0 &&
       timelineDuration > 0 &&
       currentTime >= timelineDuration
     ) {
-      setCurrentClipIndex(0);
       if (videoRef.current) {
-        safeSeek(0, true); // Force seek to beginning
+        safeSeek(videoRef.current, 'primary', 0, true);
       }
-      const startingOffset = clipOffsets[0] ?? 0;
-      setCurrentTime(startingOffset);
-      lastTimelineTimeRef.current = startingOffset;
-      dispatch(setPlayheadPosition(startingOffset * pixelsPerSecond));
+      setCurrentTime(0);
+      lastTimelineTimeRef.current = 0;
+      dispatch(setPlayheadPosition(0));
     }
   }, [
     isPlaying,
-    timelineClips,
     timelineDuration,
     currentTime,
-    clipOffsets,
     dispatch,
     pixelsPerSecond,
+    safeSeek,
   ]);
 
-  // Keep current clip index within bounds when timeline changes
+  // Load media URLs for all active clips
   useEffect(() => {
-    if (timelineClips.length === 0) {
-      setCurrentClipIndex(0);
-      setCurrentTime(0);
-      lastTimelineTimeRef.current = 0;
-      lastDispatchedPlayheadRef.current = 0;
-      dispatch(setPlayheadPosition(0));
+    const cancelled = new Set<string>();
+
+    // Load URLs for all active clips
+    const allActiveClips = [
+      ...activeClips.video,
+      ...activeClips.audio,
+      ...activeClips.overlay
+    ];
+
+    // Create stable reference to active clip IDs
+    const activeClipIds = new Set(allActiveClips.map(({ clip }) => clip.id));
+
+    allActiveClips.forEach(({ clip, mediaClip }) => {
+      const clipId = clip.id;
+      // Only load if we don't already have the URL and aren't already loading it
+      const alreadyHasUrl = mediaUrls.has(clipId);
+      const alreadyLoading = loadingUrlsRef.current.has(clipId);
+
+      if (!alreadyHasUrl && !alreadyLoading) {
+        // Mark as loading
+        loadingUrlsRef.current.add(clipId);
+
+        // Load URL asynchronously
+        window.electronAPI.getVideoUrl(mediaClip.filePath)
+          .then((url: string) => {
+            if (!cancelled.has(clipId)) {
+              loadingUrlsRef.current.delete(clipId);
+              setMediaUrls(prevMap => {
+                const updated = new Map(prevMap);
+                if (!updated.has(clipId)) {
+                  updated.set(clipId, url);
+                  return updated;
+                }
+                return prevMap;
+              });
+            } else {
+              loadingUrlsRef.current.delete(clipId);
+            }
+          })
+          .catch((error: unknown) => {
+            console.error(`Error getting URL for clip ${clipId}:`, error);
+            loadingUrlsRef.current.delete(clipId);
+          });
+      }
+    });
+
+    // Clean up URLs for clips that are no longer active
+    setMediaUrls(prev => {
+      let changed = false;
+      const updated = new Map(prev);
+      for (const [clipId] of updated) {
+        if (!activeClipIds.has(clipId)) {
+          updated.delete(clipId);
+          loadingUrlsRef.current.delete(clipId); // Also remove from loading set
+          changed = true;
+        }
+      }
+      // Only return new map if something changed
+      return changed ? updated : prev;
+    });
+
+    return () => {
+      // Mark all as cancelled on cleanup
+      allActiveClips.forEach(({ clip }) => {
+        cancelled.add(clip.id);
+        loadingUrlsRef.current.delete(clip.id);
+      });
+    };
+  }, [activeClips]); // Only depend on activeClips, not mediaUrls
+
+  // Start playing when URL becomes available and isPlaying is true
+  useEffect(() => {
+    if (isPlaying && hasVideoTrack && primaryVideoClip && videoRef.current) {
+      const videoUrl = mediaUrls.get(primaryVideoClip.clip.id);
+      if (videoUrl && videoRef.current.src !== videoUrl) {
+        const playbackTime = calculateClipPlaybackTime(
+          primaryVideoClip.clip,
+          currentTime,
+          primaryVideoClip.mediaClip
+        );
+        
+        videoRef.current.src = videoUrl;
+        videoRef.current.load();
+        
+        const handleCanPlay = () => {
+          if (videoRef.current && isPlaying) {
+            videoRef.current.currentTime = playbackTime;
+            videoRef.current.play().catch(console.error);
+          }
+          videoRef.current?.removeEventListener('canplay', handleCanPlay);
+        };
+        
+        videoRef.current.addEventListener('canplay', handleCanPlay);
+        
+        return () => {
+          videoRef.current?.removeEventListener('canplay', handleCanPlay);
+        };
+      }
+    }
+  }, [isPlaying, hasVideoTrack, primaryVideoClip, mediaUrls, currentTime]);
+
+  // Handle playhead scrubbing from timeline (only when user scrubs, not during playback)
+  useEffect(() => {
+    if (pixelsPerSecond <= 0) {
       return;
     }
 
-    if (currentClipIndex >= timelineClips.length) {
-      setCurrentClipIndex(timelineClips.length - 1);
-    }
-  }, [timelineClips, currentClipIndex, dispatch]);
-
-  // Get media URL when media clip changes
-  useEffect(() => {
-    let isCancelled = false;
-
-    if (currentTimelineClip && currentMediaClip) {
-      const trimIn = currentTimelineClip.trimIn ?? 0;
-      pendingSeekRef.current = trimIn;
-
-      if (isAudioOnly) {
-        // Load audio URL for audio-only tracks
-        window.electronAPI.getVideoUrl(currentMediaClip.filePath)
-          .then((url: string) => {
-            if (!isCancelled) {
-              setAudioUrl(url);
-              setVideoUrl(null);
-            }
-          })
-          .catch((error: unknown) => {
-            if (!isCancelled) {
-              console.error('Error getting audio URL:', error);
-              setAudioUrl(null);
-            }
-          });
-      } else {
-        // Load video URL for video tracks
-        window.electronAPI.getVideoUrl(currentMediaClip.filePath)
-          .then((url: string) => {
-            if (!isCancelled) {
-              setVideoUrl(url);
-              setAudioUrl(null);
-            }
-          })
-          .catch((error: unknown) => {
-            if (!isCancelled) {
-              console.error('Error getting video URL:', error);
-              setVideoUrl(null);
-            }
-          });
-      }
-    } else {
-      setVideoUrl(null);
-      setAudioUrl(null);
-    }
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [currentTimelineClip, currentMediaClip, isAudioOnly]);
-
-  useEffect(() => {
-    if (!timelineClips.length || pixelsPerSecond <= 0) {
+    // Don't scrub if video is playing smoothly - playhead updates during playback
+    // should come from video timeupdate events, not manual scrubbing
+    if (isPlaying && isPlayingSmoothlyRef.current && playbackInitializedRef.current) {
+      // During smooth playback, ignore playhead position changes from Redux
+      // The video element drives the playhead position
       return;
     }
 
     const targetTime = playheadPosition / pixelsPerSecond;
 
-    if (!Number.isFinite(targetTime) || Math.abs(targetTime - currentTime) < 0.02) {
+    if (!Number.isFinite(targetTime) || Math.abs(targetTime - currentTime) < 0.05) {
       return;
     }
 
-    const clipIndex = timelineClips.findIndex(({ clip }, index) => {
-      const clipOffset = clipOffsets[index] ?? 0;
-      const clipDuration = clip.duration || 0;
-      return targetTime >= clipOffset && targetTime <= clipOffset + clipDuration;
+    // User is scrubbing or we need to initialize playback
+    setCurrentTime(targetTime);
+    smoothPlayheadTargetRef.current = targetTime;
+    smoothPlayheadCurrentRef.current = targetTime;
+    setSmoothPlayheadTime(targetTime); // Snap smooth playhead to scrubbed position
+    lastTimelineTimeRef.current = targetTime;
+    playbackInitializedRef.current = false; // Reset so playback control will seek
+
+    // Seek all active media elements to the correct time
+    if (primaryVideoClip && videoRef.current) {
+      const playbackTime = calculateClipPlaybackTime(
+        primaryVideoClip.clip,
+        targetTime,
+        primaryVideoClip.mediaClip
+      );
+      if (videoRef.current.readyState >= 1) {
+        safeSeek(videoRef.current, primaryVideoClip.clip.id, playbackTime, true);
+      } else {
+        pendingSeekRef.current.set(primaryVideoClip.clip.id, playbackTime);
+      }
+    }
+
+    // Seek all active audio elements
+    activeClips.audio.forEach(({ clip, mediaClip }) => {
+      const audioElement = audioRefs.current.get(clip.id);
+      if (audioElement) {
+        const playbackTime = calculateClipPlaybackTime(clip, targetTime, mediaClip);
+        if (audioElement.readyState >= 1) {
+          safeSeek(audioElement, clip.id, playbackTime, true);
+        } else {
+          pendingSeekRef.current.set(clip.id, playbackTime);
+        }
+      }
     });
 
-    if (clipIndex === -1) {
-      setCurrentTime(targetTime);
-      lastTimelineTimeRef.current = targetTime;
-      if (videoRef.current) {
-        videoRef.current.pause();
+    // Seek all overlay video elements
+    activeClips.overlay.forEach(({ clip, mediaClip }) => {
+      const overlayElement = overlayVideoRefs.current.get(clip.id);
+      if (overlayElement) {
+        const playbackTime = calculateClipPlaybackTime(clip, targetTime, mediaClip);
+        if (overlayElement.readyState >= 1) {
+          safeSeek(overlayElement, clip.id, playbackTime, true);
+        } else {
+          pendingSeekRef.current.set(clip.id, playbackTime);
+        }
       }
-      return;
-    }
-
-    const clipOffset = clipOffsets[clipIndex] ?? 0;
-    const clipEntry = timelineClips[clipIndex];
-    const clip = clipEntry?.clip;
-    if (!clip) return;
-    const trimIn = clip.trimIn ?? 0;
-    const relativeTimelineTime = Math.max(0, targetTime - clipOffset);
-    const limitedTimelineTime = clip.duration
-      ? Math.min(relativeTimelineTime, clip.duration)
-      : relativeTimelineTime;
-    const mediaTime = trimIn + limitedTimelineTime;
-
-    setCurrentClipIndex(clipIndex);
-    setCurrentTime(targetTime);
-    lastTimelineTimeRef.current = targetTime;
-
-    if (videoRef.current) {
-      if (videoRef.current.readyState >= 1) {
-        safeSeek(mediaTime, true); // Force seek for timeline scrubbing
-      } else {
-        pendingSeekRef.current = mediaTime;
-      }
-    } else {
-      pendingSeekRef.current = mediaTime;
-    }
+    });
   }, [
     playheadPosition,
     pixelsPerSecond,
-    timelineClips,
-    clipOffsets,
     currentTime,
     safeSeek,
+    primaryVideoClip,
+    activeClips,
+    isPlaying,
   ]);
 
   const handlePlayPause = () => {
@@ -608,12 +732,29 @@ const Preview: React.FC = () => {
 
   const handleStop = () => {
     dispatch(setPlaying(false));
-    if (videoRef.current) {
-      safeSeek(0, true); // Force seek to beginning
+    // Seek all media elements to beginning
+    if (primaryVideoClip && videoRef.current) {
+      safeSeek(videoRef.current, primaryVideoClip.clip.id, 0, true);
       videoRef.current.pause();
     }
-    setCurrentClipIndex(0);
+    activeClips.audio.forEach(({ clip }) => {
+      const audioElement = audioRefs.current.get(clip.id);
+      if (audioElement) {
+        safeSeek(audioElement, clip.id, 0, true);
+        audioElement.pause();
+      }
+    });
+    activeClips.overlay.forEach(({ clip }) => {
+      const overlayElement = overlayVideoRefs.current.get(clip.id);
+      if (overlayElement) {
+        safeSeek(overlayElement, clip.id, 0, true);
+        overlayElement.pause();
+      }
+    });
     setCurrentTime(0);
+    smoothPlayheadTargetRef.current = 0;
+    smoothPlayheadCurrentRef.current = 0;
+    setSmoothPlayheadTime(0);
     lastTimelineTimeRef.current = 0;
     lastDispatchedPlayheadRef.current = 0;
     dispatch(setPlayheadPosition(0));
@@ -652,66 +793,147 @@ const Preview: React.FC = () => {
         </div>
         
         <div className="preview-video">
-          {currentMediaClip && (videoUrl || audioUrl) ? (
-            <div className="preview-video-container">
-              {isAudioOnly ? (
-                <audio
-                  key={currentTimelineClip?.id ?? 'preview-audio'}
-                  ref={audioRef}
-                  src={audioUrl || undefined}
-                  data-timeline-clip-id={currentTimelineClip?.id ?? ''}
-                  preload="auto"
-                  onLoadedMetadata={() => {
-                    if (audioRef.current) {
-                      setTotalDuration(audioRef.current.duration);
-                    }
-                  }}
-                  onError={(e) => {
-                    console.error('Audio load error:', e);
-                    console.error('Audio src:', audioUrl);
-                  }}
-                  controls={false}
-                  style={{ display: 'none' }}
-                />
-              ) : (
+          {hasActiveClips(activeClips) ? (
+            <div className="preview-video-container" style={{ position: 'relative', width: '100%', height: '100%' }}>
+              {/* Primary video track */}
+              {primaryVideoClip && (
                 <video
-                  key={currentTimelineClip?.id ?? 'preview-video'}
+                  key={primaryVideoClip.clip.id}
                   ref={videoRef}
-                  src={videoUrl || undefined}
-                  data-timeline-clip-id={currentTimelineClip?.id ?? ''}
+                  src={mediaUrls.get(primaryVideoClip.clip.id) || undefined}
+                  data-timeline-clip-id={primaryVideoClip.clip.id}
                   style={{ 
+                    position: hasVideoTrack ? 'absolute' : 'relative',
                     width: '100%', 
                     height: '100%', 
                     objectFit: 'contain',
                     maxWidth: '100%',
-                    maxHeight: '100%'
+                    maxHeight: '100%',
+                    top: 0,
+                    left: 0,
+                    zIndex: 1
                   }}
-                  preload="auto"
+                  preload="metadata"
                   playsInline
                   disablePictureInPicture
                   onLoadedMetadata={() => {
-                    if (videoRef.current) {
+                    if (videoRef.current && !hasAudioTrack) {
                       setTotalDuration(videoRef.current.duration);
+                    }
+                    // If playing, ensure we seek to correct time and play
+                    if (isPlaying && videoRef.current && primaryVideoClip) {
+                      const playbackTime = calculateClipPlaybackTime(
+                        primaryVideoClip.clip,
+                        currentTime,
+                        primaryVideoClip.mediaClip
+                      );
+                      videoRef.current.currentTime = playbackTime;
+                      videoRef.current.play().catch(console.error);
                     }
                   }}
                   onError={(e) => {
                     console.error('Video load error:', e);
-                    console.error('Video src:', videoUrl);
                   }}
                   controls={false}
                 />
               )}
-              {isPlaying && (
-                <div className="preview-playing-overlay">
-                  {isAudioOnly ? '🎵 Playing...' : '▶️ Playing...'}
+
+              {/* Overlay video tracks */}
+              {activeClips.overlay.map(({ clip }) => {
+                const overlayUrl = mediaUrls.get(clip.id);
+                if (!overlayUrl) return null;
+
+                return (
+                  <video
+                    key={clip.id}
+                    ref={(el) => {
+                      if (el) {
+                        overlayVideoRefs.current.set(clip.id, el);
+                      } else {
+                        overlayVideoRefs.current.delete(clip.id);
+                      }
+                    }}
+                    src={overlayUrl}
+                    data-timeline-clip-id={clip.id}
+                    style={{ 
+                      position: 'absolute',
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'contain',
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      top: 0,
+                      left: 0,
+                      zIndex: 2
+                    }}
+                    preload="metadata"
+                    playsInline
+                    disablePictureInPicture
+                    onError={(e) => {
+                      console.error(`Overlay video load error for clip ${clip.id}:`, e);
+                    }}
+                    controls={false}
+                  />
+                );
+              })}
+
+              {/* Hidden audio elements */}
+              {activeClips.audio.map(({ clip }) => {
+                const audioUrl = mediaUrls.get(clip.id);
+                if (!audioUrl) return null;
+
+                return (
+                  <audio
+                    key={clip.id}
+                    ref={(el) => {
+                      if (el) {
+                        audioRefs.current.set(clip.id, el);
+                      } else {
+                        audioRefs.current.delete(clip.id);
+                      }
+                    }}
+                    src={audioUrl}
+                    data-timeline-clip-id={clip.id}
+                    preload="auto"
+                    onLoadedMetadata={() => {
+                      const audioElement = audioRefs.current.get(clip.id);
+                      if (audioElement && !hasVideoTrack) {
+                        setTotalDuration(audioElement.duration);
+                      }
+                    }}
+                    onError={(e) => {
+                      console.error(`Audio load error for clip ${clip.id}:`, e);
+                    }}
+                    controls={false}
+                    style={{ display: 'none' }}
+                  />
+                );
+              })}
+
+              {/* Loading state */}
+              {primaryVideoClip && !mediaUrls.has(primaryVideoClip.clip.id) && (
+                <div className="preview-placeholder" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}>
+                  <div className="preview-icon">⏳</div>
+                  <p>Loading media...</p>
+                  <p className="text-gray-400">Preparing tracks for playback</p>
                 </div>
               )}
-            </div>
-          ) : currentMediaClip && !videoUrl && !audioUrl ? (
-            <div className="preview-placeholder">
-              <div className="preview-icon">⏳</div>
-              <p>Loading {isAudioOnly ? 'audio' : 'video'}...</p>
-              <p className="text-gray-400">Preparing {isAudioOnly ? 'audio' : 'video'} for playback</p>
+
+              {/* Playing indicator */}
+              {isPlaying && (
+                <div className="preview-playing-overlay">
+                  {hasVideoTrack ? '▶️ Playing...' : '🎵 Playing...'}
+                </div>
+              )}
+
+              {/* Subtitle overlay */}
+              {activeSubtitleText && (
+                <div className="preview-subtitle">
+                  {activeSubtitleText.split('\n').map((line, index) => (
+                    <div key={index}>{line}</div>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div className="preview-placeholder">
@@ -720,7 +942,7 @@ const Preview: React.FC = () => {
               <p className="text-gray-400">Drag a video or audio to the timeline</p>
               {isPlaying && (
                 <div style={{ marginTop: '10px', color: '#007AFF', fontSize: '14px' }}>
-                  {isAudioOnly ? '🎵 Playing...' : '▶️ Playing...'}
+                  {hasVideoTrack ? '▶️ Playing...' : '🎵 Playing...'}
                 </div>
               )}
             </div>
@@ -732,13 +954,15 @@ const Preview: React.FC = () => {
             <div 
               className="preview-progress" 
               style={{ 
-                width: totalDuration > 0 ? `${(currentTime / totalDuration) * 100}%` : '0%' 
+                width: totalDuration > 0 ? `${(smoothPlayheadTime / totalDuration) * 100}%` : '0%',
+                transition: 'none' // Remove transition for smooth animation frame updates
               }}
             ></div>
             <div 
               className="preview-handle" 
               style={{ 
-                left: totalDuration > 0 ? `${(currentTime / totalDuration) * 100}%` : '0%' 
+                left: totalDuration > 0 ? `${(smoothPlayheadTime / totalDuration) * 100}%` : '0%',
+                transition: 'none' // Remove transition for smooth animation frame updates
               }}
             ></div>
           </div>

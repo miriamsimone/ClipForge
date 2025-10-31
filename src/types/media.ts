@@ -14,12 +14,18 @@ export interface MediaClip {
   format: string;
   thumbnail?: string;
   thumbnails?: ThumbnailFrame[];
+  subtitles?: SubtitleData;
   createdAt: number;
 }
 
 export interface ThumbnailFrame {
   timestamp: number;
   data: string;
+}
+
+export interface SubtitleData {
+  srtContent: string;
+  generatedAt: number;
 }
 
 export interface MediaLibraryState {
